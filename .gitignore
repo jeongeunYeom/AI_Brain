@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+.env*.local
+.env
+backend/.env
+frontend/.env.local
+
+# Runtime data (keep directory placeholders)
+data/raw/*
+data/extracted/*
+data/figures/*
+data/figure_notes/*
+data/vector_db/*
+data/metadata/*
+!data/**/.gitkeep
+
+# OS/editor
+.DS_Store
+.vscode/
