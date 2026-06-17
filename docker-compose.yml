@@ -1,0 +1,28 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATA_DIR: /app/data
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      TEXT_MODEL: qwen3:8b
+      VISION_MODEL: qwen2.5vl:7b
+      EMBEDDING_MODEL: BAAI/bge-m3
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8000/api
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
