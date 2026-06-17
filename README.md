@@ -112,3 +112,23 @@ curl http://127.0.0.1:8000/api/system/checklist
 ## Connect-AI reuse
 
 This project reuses the local-first Ollama integration pattern and autonomous agent discipline from `wonseokjung/connect-ai` while excluding VS Code-specific extension code. The reusable ideas are implemented as web/backend modules: local model configuration, Ollama `/api/chat` calls, model listing, file ingestion, and structured agent prompts.
+
+## Retrieval controls and safety
+
+The backend classifies questions before retrieval:
+
+- `local_fact_search`: specific concept or term lookup.
+- `document_overview`: document purpose, structure, contents, or summary. Contents/title-page chunks are prioritized.
+- `index_lookup`: Author Index, Subject Index, SPE Symbols Standard, unit/symbol/page lookups. Hybrid keyword/vector retrieval favors exact matches.
+- `aggregate_analysis`: whole-document TOP-N/frequency/statistical requests. These are not sent to the LLM as long context; the API returns a message that a Python whole-document analysis function is required.
+
+Relevant environment variables:
+
+```bash
+TOP_K=10
+SIMILARITY_THRESHOLD=0.35
+OLLAMA_TIMEOUT_SECONDS=240
+OLLAMA_TEMPERATURE=0
+```
+
+The system prompt instructs the model to answer only from retrieved chunks and to reply `제공된 문서 근거로는 확인할 수 없습니다.` when evidence is insufficient.

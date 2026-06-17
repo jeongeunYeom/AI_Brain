@@ -7,7 +7,10 @@ class Source(BaseModel):
     page: int | None = None
     chunk_id: str
     score: float | None = None
+    vector_score: float | None = None
+    keyword_score: float | None = None
     excerpt: str
+    preview: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -18,6 +21,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list[Source]
+    query_type: str | None = None
 
 
 class DocumentRecord(BaseModel):
@@ -28,6 +32,10 @@ class DocumentRecord(BaseModel):
     pages: int = 0
     chunks: int = 0
     figures: int = 0
+    title: str | None = None
+    document_type: str | None = None
+    contents_pages: list[int] = Field(default_factory=list)
+    title_pages: list[int] = Field(default_factory=list)
 
 
 class UploadResponse(BaseModel):

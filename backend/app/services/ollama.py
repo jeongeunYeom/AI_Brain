@@ -28,9 +28,10 @@ class OllamaClient:
             "model": model or self.settings.text_model,
             "messages": messages,
             "stream": False,
+            "options": {"temperature": self.settings.ollama_temperature},
         }
         try:
-            async with httpx.AsyncClient(timeout=180) as client:
+            async with httpx.AsyncClient(timeout=self.settings.ollama_timeout_seconds) as client:
                 response = await client.post(f"{self.base_url}/api/chat", json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -49,9 +50,10 @@ class OllamaClient:
             "model": self.settings.vision_model,
             "messages": [{"role": "user", "content": graph_prompt, "images": [encoded]}],
             "stream": False,
+            "options": {"temperature": self.settings.ollama_temperature},
         }
         try:
-            async with httpx.AsyncClient(timeout=240) as client:
+            async with httpx.AsyncClient(timeout=self.settings.ollama_timeout_seconds) as client:
                 response = await client.post(f"{self.base_url}/api/chat", json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:

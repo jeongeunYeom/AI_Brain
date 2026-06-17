@@ -25,7 +25,10 @@ class Settings:
     collection_name: str = field(default_factory=lambda: os.getenv("CHROMA_COLLECTION", "petroleum_knowledge"))
     chunk_size: int = field(default_factory=lambda: int(os.getenv("CHUNK_SIZE", "1200")))
     chunk_overlap: int = field(default_factory=lambda: int(os.getenv("CHUNK_OVERLAP", "180")))
-    top_k: int = field(default_factory=lambda: int(os.getenv("TOP_K", "5")))
+    top_k: int = field(default_factory=lambda: int(os.getenv("TOP_K", "10")))
+    similarity_threshold: float = field(default_factory=lambda: float(os.getenv("SIMILARITY_THRESHOLD", "0.35")))
+    ollama_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "240")))
+    ollama_temperature: float = field(default_factory=lambda: float(os.getenv("OLLAMA_TEMPERATURE", "0")))
 
     @property
     def raw_dir(self) -> Path:

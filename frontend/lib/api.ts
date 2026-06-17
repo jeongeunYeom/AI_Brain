@@ -5,12 +5,16 @@ export type Source = {
   page: number | null;
   chunk_id: string;
   score: number | null;
+  vector_score?: number | null;
+  keyword_score?: number | null;
   excerpt: string;
+  preview?: string | null;
 };
 
 export type ChatResponse = {
   answer: string;
   sources: Source[];
+  query_type?: string | null;
 };
 
 export type SystemCheck = {
@@ -43,10 +47,32 @@ export async function getSystemStatus(): Promise<SystemStatus> {
   return response.json();
 }
 
-export async function uploadDocument(file: File, analyzeFigures: boolean) {
+export type UploadJob = {
+  job_id: string;
+  step: number;
+  total_steps: number;
+  message: string;
+  status: "running" | "completed" | "failed";
+  error?: string | null;
+};
+
+export async function createUploadJob(): Promise<{ job_id: string }> {
+  const response = await fetch(`${API_BASE}/jobs`, { method: "POST" });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+export async function getUploadJob(jobId: string): Promise<UploadJob> {
+  const response = await fetch(`${API_BASE}/jobs/${jobId}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+export async function uploadDocument(file: File, analyzeFigures: boolean, jobId?: string) {
   const form = new FormData();
   form.append("file", file);
-  const response = await fetch(`${API_BASE}/documents/upload?analyze_figures=${analyzeFigures}`, {
+  const suffix = jobId ? `&job_id=${jobId}` : "";
+  const response = await fetch(`${API_BASE}/documents/upload?analyze_figures=${analyzeFigures}${suffix}`, {
     method: "POST",
     body: form
   });

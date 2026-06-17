@@ -1,7 +1,8 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { analyzeImage, askQuestion, ChatResponse, uploadDocument } from "@/lib/api";
+import { analyzeImage, askQuestion, ChatResponse, createUploadJob, getUploadJob, uploadDocument, UploadJob } from "@/lib/api";
+import { DocumentInfoPanel } from "@/components/DocumentInfoPanel";
 import { PlotPanel } from "@/components/PlotPanel";
 import { SystemStatusPanel } from "@/components/SystemStatusPanel";
 
@@ -13,17 +14,32 @@ export default function Home() {
   const [vision, setVision] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uploadJob, setUploadJob] = useState<UploadJob | null>(null);
+  const [expandedSource, setExpandedSource] = useState<string | null>(null);
 
   async function onUpload() {
     if (!documentFile) return;
     setBusy(true);
     setStatus("Uploading and indexing document...");
+    setUploadJob(null);
+    let poller: ReturnType<typeof setInterval> | null = null;
     try {
-      const result = await uploadDocument(documentFile, true);
+      const job = await createUploadJob();
+      poller = setInterval(async () => {
+        try {
+          setUploadJob(await getUploadJob(job.job_id));
+        } catch {
+          // Keep upload running even if one polling request fails.
+        }
+      }, 1000);
+      const result = await uploadDocument(documentFile, true, job.job_id);
+      const finalJob = await getUploadJob(job.job_id);
+      setUploadJob(finalJob);
       setStatus(result.skipped ? "Already processed; reused persistent vector store." : `Processed ${result.document.chunks} chunks.`);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Upload failed");
     } finally {
+      if (poller) clearInterval(poller);
       setBusy(false);
     }
   }
@@ -72,6 +88,20 @@ export default function Home() {
         </header>
 
         <SystemStatusPanel />
+        <DocumentInfoPanel />
+
+        {uploadJob && (
+          <div className="rounded-xl border border-petroleum-400/40 bg-petroleum-950 p-4 text-sm text-emerald-100">
+            <div className="flex items-center justify-between">
+              <span>{uploadJob.status === "failed" ? "❌" : uploadJob.status === "completed" ? "✅" : "⏳"} {uploadJob.message}</span>
+              <span>{uploadJob.step}/{uploadJob.total_steps}</span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-petroleum-700">
+              <div className="h-full bg-petroleum-400" style={{ width: `${Math.min(100, (uploadJob.step / uploadJob.total_steps) * 100)}%` }} />
+            </div>
+            {uploadJob.error && <p className="mt-2 text-red-200">{uploadJob.error}</p>}
+          </div>
+        )}
 
         {status && <div className="rounded-xl border border-petroleum-400/40 bg-petroleum-950 p-4 text-sm text-emerald-100">{busy ? "⏳ " : "✅ "}{status}</div>}
 
@@ -111,8 +141,16 @@ export default function Home() {
                   <ul className="mt-2 space-y-2 text-sm text-emerald-100/80">
                     {answer.sources.map((source) => (
                       <li key={source.chunk_id} className="rounded-lg border border-petroleum-700 p-3">
-                        {source.document} {source.page ? `p.${source.page}` : ""} · score {source.score?.toFixed(3) ?? "n/a"}
-                        <p className="mt-1 line-clamp-2 text-emerald-100/60">{source.excerpt}</p>
+                        <button className="w-full text-left" onClick={() => setExpandedSource(expandedSource === source.chunk_id ? null : source.chunk_id)}>
+                          <span className="font-semibold">{source.document}</span> {source.page ? `p.${source.page}` : ""}
+                          <span className="ml-2 text-petroleum-300">score {source.score?.toFixed(3) ?? "n/a"}</span>
+                          <span className="ml-2 text-emerald-100/50">vector {source.vector_score?.toFixed(3) ?? "0.000"} · keyword {source.keyword_score?.toFixed(3) ?? "0.000"}</span>
+                          <span className="block text-xs text-emerald-100/50">chunk {source.chunk_id}</span>
+                        </button>
+                        <p className="mt-2 text-emerald-100/60">{source.preview ?? source.excerpt}</p>
+                        {expandedSource === source.chunk_id && (
+                          <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-petroleum-950 p-3 text-xs text-emerald-50">{source.excerpt}</pre>
+                        )}
                       </li>
                     ))}
                   </ul>

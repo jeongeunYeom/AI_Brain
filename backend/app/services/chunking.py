@@ -24,6 +24,10 @@ def chunk_pages(
                     "document": filename,
                     "page": page["page"],
                     "chunk_index": chunk_index,
+                    "is_contents": bool(page.get("is_contents", False)),
+                    "is_title_page": bool(page.get("is_title_page", False)),
+                    "heading": str(page.get("heading", "")),
+                    "document_type": str(page.get("document_type", "")),
                 },
             })
             if end == len(text):

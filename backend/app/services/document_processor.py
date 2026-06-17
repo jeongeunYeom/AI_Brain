@@ -57,6 +57,9 @@ class DocumentProcessor:
         else:
             pages, figure_count = [{"page": 1, "text": f"Uploaded {suffix} document. PPT text extraction is reserved for the Phase 2 parser."}], 0
 
+        document_info = self.detect_document_info(pages, file_path.name)
+        for page in pages:
+            page["document_type"] = document_info.get("document_type", "")
         chunks = self.chunk_pages(pages, file_path.name, digest)
         record = DocumentRecord(
             document_id=digest,
@@ -66,6 +69,10 @@ class DocumentProcessor:
             pages=len(pages),
             chunks=len(chunks),
             figures=figure_count,
+            title=document_info.get("title"),
+            document_type=document_info.get("document_type"),
+            contents_pages=document_info.get("contents_pages", []),
+            title_pages=document_info.get("title_pages", []),
         )
         (self.settings.extracted_dir / f"{digest}.json").write_text(
             json.dumps({"pages": pages, "chunks": chunks}, ensure_ascii=False, indent=2),
@@ -124,6 +131,43 @@ class DocumentProcessor:
             plumber_pdf.close()
             doc.close()
         return pages, figure_count
+
+    def detect_document_info(self, pages: list[dict[str, object]], filename: str) -> dict[str, object]:
+        contents_pages: list[int] = []
+        title_pages: list[int] = []
+        title = Path(filename).stem
+        document_type = "unknown"
+        contents_terms = [
+            "master author index", "master subject index", "spe symbols standard",
+            "si metric conversion factors", "alphabetical list of units",
+            "tables of recommended si units", "contents", "table of contents",
+        ]
+        for page in pages:
+            page_num = int(page.get("page", 0))
+            text = str(page.get("text", ""))
+            lower = text.lower()
+            hits = sum(1 for term in contents_terms if term in lower)
+            is_contents = ("contents" in lower and hits >= 2) or hits >= 4
+            if is_contents:
+                page["is_contents"] = True
+                page["heading"] = "Contents"
+                contents_pages.append(page_num)
+            if page_num <= 3:
+                page["is_title_page"] = True
+                title_pages.append(page_num)
+                lines = [line.strip() for line in text.splitlines() if len(line.strip()) > 5]
+                for line in lines[:8]:
+                    if "petroleum engineering handbook" in line.lower() or "indexes and standards" in line.lower():
+                        title = line
+                        break
+            if "master author index" in lower or "master subject index" in lower or "spe symbols standard" in lower:
+                document_type = "indexes_and_standards"
+        return {
+            "title": title,
+            "document_type": document_type,
+            "contents_pages": sorted(set(contents_pages)),
+            "title_pages": sorted(set(title_pages)),
+        }
 
     def chunk_pages(self, pages: list[dict[str, object]], filename: str, digest: str) -> list[dict[str, object]]:
         return chunk_pages(pages, filename, digest, self.settings.chunk_size, self.settings.chunk_overlap)
