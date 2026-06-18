@@ -80,7 +80,7 @@ export default function Home() {
 
   function startSidebarResize() {
     const onMouseMove = (event: MouseEvent) => {
-      const nextWidth = Math.min(460, Math.max(240, event.clientX));
+      const nextWidth = Math.min(520, Math.max(248, event.clientX));
       setSidebarWidth(nextWidth);
     };
 
@@ -102,28 +102,39 @@ export default function Home() {
       <aside className="relative hidden shrink-0 border-r border-slate-200 bg-[#f8fafc] md:flex md:flex-col" style={{ width: sidebarWidth }}>
         <div className="flex h-14 items-center gap-3 border-b border-slate-200 px-4">
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-600 text-sm font-bold text-white">A</div>
-          <div>
-            <h1 className="text-sm font-bold">AI_Brain</h1>
-            <p className="text-[11px] text-slate-500">Petroleum RAG Agent</p>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-bold">AI_Brain</h1>
+            <p className="truncate text-[11px] text-slate-500">Petroleum RAG Agent</p>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 py-4">
-          <button className="mb-4 flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm">
+          <button className="mb-4 flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm hover:bg-slate-50">
             <span>＋</span>
             New chat
           </button>
 
           <div className="space-y-5">
             <section>
-              <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Knowledge Base</p>
+              <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Recent Chats</p>
               <div className="space-y-1 text-sm">
-                <div className="rounded-lg bg-indigo-50 px-3 py-2 font-medium text-indigo-700">📚 Petroleum Engineering</div>
-                <div className="rounded-lg px-3 py-2 text-slate-600 hover:bg-white">⛽ Drilling</div>
-                <div className="rounded-lg px-3 py-2 text-slate-600 hover:bg-white">🪨 Reservoir</div>
-                <div className="rounded-lg px-3 py-2 text-slate-600 hover:bg-white">🏭 Production</div>
-                <div className="rounded-lg px-3 py-2 text-slate-600 hover:bg-white">🖼 Figure Notes</div>
+                <button className="w-full truncate rounded-lg bg-indigo-50 px-3 py-2 text-left font-medium text-indigo-700">💬 Ask from uploaded PDFs</button>
+                <button className="w-full truncate rounded-lg px-3 py-2 text-left text-slate-600 hover:bg-white">💬 Bottomhole pressure</button>
+                <button className="w-full truncate rounded-lg px-3 py-2 text-left text-slate-600 hover:bg-white">💬 Formation pressure</button>
+                <button className="w-full truncate rounded-lg px-3 py-2 text-left text-slate-600 hover:bg-white">💬 Kick analysis</button>
               </div>
+            </section>
+
+            <section>
+              <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Documents</p>
+              <div className="mb-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+                <input
+                  className="w-full bg-transparent text-xs outline-none placeholder:text-slate-400"
+                  placeholder="Search documents..."
+                  disabled
+                />
+              </div>
+              <DocumentInfoPanel />
             </section>
 
             <section>
@@ -169,10 +180,7 @@ export default function Home() {
 
             <section>
               <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">System</p>
-              <div className="space-y-3">
-                <SystemStatusPanel />
-                <DocumentInfoPanel />
-              </div>
+              <SystemStatusPanel />
             </section>
           </div>
         </div>
