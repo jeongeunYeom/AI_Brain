@@ -7,7 +7,7 @@ import { PlotPanel } from "@/components/PlotPanel";
 import { SystemStatusPanel } from "@/components/SystemStatusPanel";
 
 export default function Home() {
-  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [documentFiles, setDocumentFiles] = useState<File[]>([]);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<ChatResponse | null>(null);
@@ -19,28 +19,42 @@ export default function Home() {
   const [sidebarWidth, setSidebarWidth] = useState(300);
 
   async function onUpload() {
-    if (!documentFile) return;
+    if (!documentFiles.length) return;
     setBusy(true);
-    setStatus("Uploading and indexing document...");
     setUploadJob(null);
-    let poller: ReturnType<typeof setInterval> | null = null;
+
+    let completed = 0;
+    let skipped = 0;
+    let totalChunks = 0;
+
     try {
-      const job = await createUploadJob();
-      poller = setInterval(async () => {
+      for (const file of documentFiles) {
+        setStatus(`Uploading ${completed + 1}/${documentFiles.length}: ${file.name}`);
+        const job = await createUploadJob();
+        const poller = setInterval(async () => {
+          try {
+            setUploadJob(await getUploadJob(job.job_id));
+          } catch {
+            // Keep upload running even if one polling request fails.
+          }
+        }, 1000);
+
         try {
-          setUploadJob(await getUploadJob(job.job_id));
-        } catch {
-          // Keep upload running even if one polling request fails.
+          const result = await uploadDocument(file, true, job.job_id);
+          const finalJob = await getUploadJob(job.job_id);
+          setUploadJob(finalJob);
+          completed += 1;
+          if (result.skipped) skipped += 1;
+          totalChunks += result.document?.chunks ?? 0;
+        } finally {
+          clearInterval(poller);
         }
-      }, 1000);
-      const result = await uploadDocument(documentFile, true, job.job_id);
-      const finalJob = await getUploadJob(job.job_id);
-      setUploadJob(finalJob);
-      setStatus(result.skipped ? "Already processed; reused persistent vector store." : `Processed ${result.document.chunks} chunks.`);
+      }
+
+      setStatus(`Uploaded ${completed}/${documentFiles.length} files · ${totalChunks} chunks${skipped ? ` · ${skipped} reused` : ""}.`);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Upload failed");
     } finally {
-      if (poller) clearInterval(poller);
       setBusy(false);
     }
   }
@@ -144,14 +158,15 @@ export default function Home() {
                   <input
                     className="hidden"
                     type="file"
+                    multiple
                     accept=".pdf,.txt,.png,.jpg,.jpeg,.ppt,.pptx"
-                    onChange={(event) => setDocumentFile(event.target.files?.[0] ?? null)}
+                    onChange={(event) => setDocumentFiles(Array.from(event.target.files ?? []))}
                   />
                   <span className="font-semibold">Upload document</span>
-                  <span className="mt-1 block truncate text-xs text-slate-500">{documentFile?.name ?? "PDF, TXT, PPT, image"}</span>
+                  <span className="mt-1 block truncate text-xs text-slate-500">{documentFiles.length ? `${documentFiles.length} files selected` : "PDF, TXT, PPT, image"}</span>
                 </label>
                 <button
-                  disabled={!documentFile || busy}
+                  disabled={!documentFiles.length || busy}
                   onClick={onUpload}
                   className="w-full rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-40"
                 >
