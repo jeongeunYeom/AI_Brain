@@ -1,10 +1,21 @@
 import re
+from pathlib import Path
 
 from app.core.config import Settings
 from app.models.schemas import ChatResponse, Source
 from app.services.ollama import OllamaClient
 from app.services.query_router import QueryType, classify_query
 from app.services.vector_store import VectorStore
+
+
+
+SHA256_PREFIX = re.compile(r"^[0-9a-fA-F]{64}_")
+
+
+def clean_document_name(value: object) -> str:
+    """Remove a stored SHA-256 prefix from a source filename for display/citation."""
+    filename = Path(str(value or "Unknown document")).name
+    return SHA256_PREFIX.sub("", filename)
 
 
 SYSTEM_PROMPT = """You are a strict evidence-only petroleum engineering RAG agent.
@@ -42,20 +53,35 @@ class QAService:
         for hit in hits:
             metadata = hit["metadata"]
             score = float(hit.get("score") or 0.0)
+            document_name = clean_document_name(metadata.get("document"))
+            page_number = metadata.get("page")
+
             context_blocks.append(
-                f"Source: {metadata.get('document')} p.{metadata.get('page')} chunk {hit['id']} score={score:.3f}\n{hit['text']}"
+                f"Source: {document_name} p.{page_number} "
+                f"chunk {hit['id']} score={score:.3f}\n{hit['text']}"
             )
+
             preview = self._preview(str(hit["text"]))
-            sources.append(Source(
-                document=str(metadata.get("document")),
-                page=int(metadata["page"]) if metadata.get("page") is not None else None,
-                chunk_id=str(hit["id"]),
-                score=score,
-                vector_score=float(hit.get("vector_score") or 0.0),
-                keyword_score=float(hit.get("keyword_score") or 0.0),
-                excerpt=str(hit["text"]),
-                preview=preview,
-            ))
+            sources.append(
+                Source(
+                    document=document_name,
+                    page=(
+                        int(page_number)
+                        if page_number is not None
+                        else None
+                    ),
+                    chunk_id=str(hit["id"]),
+                    score=score,
+                    vector_score=float(
+                        hit.get("vector_score") or 0.0
+                    ),
+                    keyword_score=float(
+                        hit.get("keyword_score") or 0.0
+                    ),
+                    excerpt=str(hit["text"]),
+                    preview=preview,
+                )
+            )
 
         user_prompt = (
             f"Query type: {query_type.value}\n"

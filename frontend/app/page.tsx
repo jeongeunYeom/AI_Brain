@@ -1,22 +1,184 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { analyzeImage, askQuestion, ChatResponse, createUploadJob, getUploadJob, uploadDocument, UploadJob } from "@/lib/api";
 import { DocumentInfoPanel } from "@/components/DocumentInfoPanel";
 import { PlotPanel } from "@/components/PlotPanel";
 import { SystemStatusPanel } from "@/components/SystemStatusPanel";
 
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  response?: ChatResponse;
+};
+
+type SavedChat = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+};
+
+const CHAT_HISTORY_STORAGE_KEY = "ai_brain_chat_history_v1";
+const MAX_SAVED_CHATS = 30;
+
+function createChatId(): string {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function makeChatTitle(messages: ChatMessage[]): string {
+  const firstQuestion = messages.find(
+    (message) => message.role === "user",
+  )?.content;
+
+  if (!firstQuestion) {
+    return "이전 대화";
+  }
+
+  const compact = firstQuestion.replace(/\s+/g, " ").trim();
+  return compact.length > 34
+    ? `${compact.slice(0, 34)}...`
+    : compact;
+}
+
+function formatChatDate(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default function Home() {
   const [documentFiles, setDocumentFiles] = useState<File[]>([]);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<ChatResponse | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [savedChats, setSavedChats] = useState<SavedChat[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const historyReadyRef = useRef(false);
   const [vision, setVision] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [uploadJob, setUploadJob] = useState<UploadJob | null>(null);
   const [expandedSource, setExpandedSource] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(300);
+
+
+  useEffect(() => {
+    const nextChatId = createChatId();
+    setActiveChatId(nextChatId);
+
+    try {
+      const rawHistory = window.localStorage.getItem(
+        CHAT_HISTORY_STORAGE_KEY,
+      );
+
+      if (rawHistory) {
+        const parsed = JSON.parse(rawHistory);
+
+        if (Array.isArray(parsed)) {
+          const validChats = parsed.filter(
+            (chat): chat is SavedChat =>
+              chat &&
+              typeof chat.id === "string" &&
+              typeof chat.title === "string" &&
+              typeof chat.createdAt === "string" &&
+              typeof chat.updatedAt === "string" &&
+              Array.isArray(chat.messages),
+          );
+
+          setSavedChats(validChats.slice(0, MAX_SAVED_CHATS));
+        }
+      }
+    } catch (error) {
+      console.warn("대화 기록을 불러오지 못했습니다.", error);
+    } finally {
+      historyReadyRef.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (
+      !historyReadyRef.current ||
+      !activeChatId ||
+      messages.length === 0 ||
+      !messages.some((message) => message.role === "user")
+    ) {
+      return;
+    }
+
+    setSavedChats((previous) => {
+      const now = new Date().toISOString();
+      const existing = previous.find(
+        (chat) => chat.id === activeChatId,
+      );
+
+      const savedChat: SavedChat = {
+        id: activeChatId,
+        title: makeChatTitle(messages),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        messages,
+      };
+
+      const next = [
+        savedChat,
+        ...previous.filter((chat) => chat.id !== activeChatId),
+      ]
+        .sort(
+          (left, right) =>
+            new Date(right.updatedAt).getTime() -
+            new Date(left.updatedAt).getTime(),
+        )
+        .slice(0, MAX_SAVED_CHATS);
+
+      try {
+        window.localStorage.setItem(
+          CHAT_HISTORY_STORAGE_KEY,
+          JSON.stringify(next),
+        );
+      } catch (error) {
+        console.warn("대화 기록을 저장하지 못했습니다.", error);
+      }
+
+      return next;
+    });
+  }, [activeChatId, messages]);
+
+  function startNewChat() {
+    setActiveChatId(createChatId());
+    setMessages([]);
+    setQuestion("");
+    setStatus(null);
+    setExpandedSource(null);
+    setVision(null);
+  }
+
+  function openSavedChat(chat: SavedChat) {
+    setActiveChatId(chat.id);
+    setMessages(chat.messages);
+    setQuestion("");
+    setStatus(null);
+    setExpandedSource(null);
+    setVision(null);
+  }
 
   async function onUpload() {
     if (!documentFiles.length) return;
@@ -61,15 +223,46 @@ export default function Home() {
 
   async function onAsk(event: FormEvent) {
     event.preventDefault();
-    if (!question.trim()) return;
+
+    const submittedQuestion = question.trim();
+    if (!submittedQuestion || busy) return;
+
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: submittedQuestion,
+    };
+
+    setMessages((previous) => [...previous, userMessage]);
+    setQuestion("");
     setBusy(true);
     setStatus("Searching vector database and asking Qwen3...");
+
     try {
-      const result = await askQuestion(question);
-      setAnswer(result);
+      const result = await askQuestion(submittedQuestion);
+
+      const assistantMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: result.answer,
+        response: result,
+      };
+
+      setMessages((previous) => [...previous, assistantMessage]);
       setStatus("Answer generated from retrieved sources.");
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : "Question failed");
+      const errorMessage =
+        err instanceof Error ? err.message : "Question failed";
+
+      setMessages((previous) => [
+        ...previous,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `오류: ${errorMessage}`,
+        },
+      ]);
+      setStatus(errorMessage);
     } finally {
       setBusy(false);
     }
@@ -90,7 +283,6 @@ export default function Home() {
     }
   }
 
-  const sourceCount = answer?.sources?.length ?? 0;
 
   function startSidebarResize() {
     const onMouseMove = (event: MouseEvent) => {
@@ -123,7 +315,11 @@ export default function Home() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 py-4">
-          <button className="mb-4 flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm hover:bg-slate-50">
+          <button
+            type="button"
+            onClick={startNewChat}
+            className="mb-4 flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm hover:bg-slate-50"
+          >
             <span>＋</span>
             New chat
           </button>
@@ -132,10 +328,38 @@ export default function Home() {
             <section>
               <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Recent Chats</p>
               <div className="space-y-1 text-sm">
-                <button className="w-full truncate rounded-lg bg-indigo-50 px-3 py-2 text-left font-medium text-indigo-700">💬 Ask from uploaded PDFs</button>
-                <button className="w-full truncate rounded-lg px-3 py-2 text-left text-slate-600 hover:bg-white">💬 Bottomhole pressure</button>
-                <button className="w-full truncate rounded-lg px-3 py-2 text-left text-slate-600 hover:bg-white">💬 Formation pressure</button>
-                <button className="w-full truncate rounded-lg px-3 py-2 text-left text-slate-600 hover:bg-white">💬 Kick analysis</button>
+                {savedChats.length === 0 ? (
+                  <p className="rounded-lg px-3 py-2 text-xs text-slate-400">
+                    아직 저장된 이전 대화가 없습니다.
+                  </p>
+                ) : (
+                  savedChats.map((chat) => {
+                    const isActive =
+                      activeChatId === chat.id &&
+                      messages.length > 0;
+
+                    return (
+                      <button
+                        key={chat.id}
+                        type="button"
+                        onClick={() => openSavedChat(chat)}
+                        className={`w-full rounded-lg px-3 py-2 text-left transition ${
+                          isActive
+                            ? "bg-indigo-50 font-medium text-indigo-700"
+                            : "text-slate-600 hover:bg-white"
+                        }`}
+                        title={chat.title}
+                      >
+                        <span className="block truncate">
+                          💬 {chat.title}
+                        </span>
+                        <span className="mt-0.5 block text-[10px] text-slate-400">
+                          {formatChatDate(chat.updatedAt)}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </section>
 
@@ -234,54 +458,111 @@ export default function Home() {
 
         <div className="flex-1 overflow-y-auto bg-[#f8fafc] px-4 py-6">
           <div className="mx-auto flex max-w-4xl flex-col gap-5">
-            <div className="flex justify-end">
-              <div className="max-w-[78%] rounded-3xl rounded-br-md bg-white px-4 py-3 text-sm text-slate-700 shadow-sm ring-1 ring-slate-200">
-                {question || "PDF나 교재 내용을 기반으로 궁금한 내용을 질문해봐."}
+            {messages.length === 0 && (
+              <div className="flex gap-3">
+                <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">
+                  AI
+                </div>
+                <div className="max-w-[86%] rounded-3xl rounded-tl-md bg-white px-5 py-4 text-sm leading-7 text-slate-700 shadow-sm ring-1 ring-slate-200">
+                  <p className="font-semibold text-slate-900">
+                    AI_Brain이 준비됐어.
+                  </p>
+                  <p className="mt-2">
+                    왼쪽에서 PDF/TXT/PPT 자료를 업로드한 뒤, 아래 입력창에 질문하면 검색된 문서 근거를 바탕으로 답변해.
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
 
-            <div className="flex gap-3">
-              <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">AI</div>
-              <div className="max-w-[86%] rounded-3xl rounded-tl-md bg-white px-5 py-4 text-sm leading-7 text-slate-700 shadow-sm ring-1 ring-slate-200">
-                {answer ? (
-                  <div className="whitespace-pre-wrap">{answer.answer}</div>
-                ) : (
-                  <div>
-                    <p className="font-semibold text-slate-900">AI_Brain이 준비됐어.</p>
-                    <p className="mt-2">
-                      왼쪽에서 PDF/TXT/PPT 자료를 업로드한 뒤, 아래 입력창에 질문하면 검색된 문서 근거를 바탕으로 답변해.
-                    </p>
+            {messages.map((message) => {
+              if (message.role === "user") {
+                return (
+                  <div key={message.id} className="flex justify-end">
+                    <div className="max-w-[78%] whitespace-pre-wrap rounded-3xl rounded-br-md bg-white px-4 py-3 text-sm text-slate-700 shadow-sm ring-1 ring-slate-200">
+                      {message.content}
+                    </div>
                   </div>
-                )}
+                );
+              }
 
-                {sourceCount > 0 && (
-                  <div className="mt-5 border-t border-slate-100 pt-4">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Sources</h3>
-                    <ul className="mt-2 space-y-2">
-                      {answer?.sources.map((source) => (
-                        <li key={source.chunk_id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                          <button
-                            className="w-full text-left"
-                            onClick={() => setExpandedSource(expandedSource === source.chunk_id ? null : source.chunk_id)}
-                          >
-                            <span className="font-semibold text-slate-800">{source.document}</span>
-                            {source.page ? <span className="ml-1 text-slate-500">p.{source.page}</span> : null}
-                            <span className="ml-2 text-xs text-indigo-600">score {source.score?.toFixed(3) ?? "n/a"}</span>
-                            <span className="block text-xs text-slate-400">chunk {source.chunk_id}</span>
-                          </button>
-                          <p className="mt-2 text-xs leading-5 text-slate-500">{source.preview ?? source.excerpt}</p>
-                          {expandedSource === source.chunk_id && (
-                            <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl bg-white p-3 text-xs leading-5 text-slate-700 ring-1 ring-slate-200">
-                              {source.excerpt}
-                            </pre>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
+              const response = message.response;
+              const sourceCount = response?.sources?.length ?? 0;
+
+              return (
+                <div key={message.id} className="flex gap-3">
+                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">
+                    AI
                   </div>
-                )}
-              </div>
-            </div>
+
+                  <div className="max-w-[86%] rounded-3xl rounded-tl-md bg-white px-5 py-4 text-sm leading-7 text-slate-700 shadow-sm ring-1 ring-slate-200">
+                    <div className="whitespace-pre-wrap">
+                      {message.content}
+                    </div>
+
+                    {sourceCount > 0 && (
+                      <div className="mt-5 border-t border-slate-100 pt-4">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                          Sources
+                        </h3>
+
+                        <ul className="mt-2 space-y-2">
+                          {response?.sources.map((source) => {
+                            const sourceKey = `${message.id}:${source.chunk_id}`;
+
+                            return (
+                              <li
+                                key={sourceKey}
+                                className="rounded-2xl border border-slate-200 bg-slate-50 p-3"
+                              >
+                                <button
+                                  className="w-full text-left"
+                                  onClick={() =>
+                                    setExpandedSource(
+                                      expandedSource === sourceKey
+                                        ? null
+                                        : sourceKey,
+                                    )
+                                  }
+                                >
+                                  <span className="font-semibold text-slate-800">
+                                    {source.document}
+                                  </span>
+
+                                  {source.page ? (
+                                    <span className="ml-1 text-slate-500">
+                                      p.{source.page}
+                                    </span>
+                                  ) : null}
+
+                                  <span className="ml-2 text-xs text-indigo-600">
+                                    score{" "}
+                                    {source.score?.toFixed(3) ?? "n/a"}
+                                  </span>
+
+                                  <span className="block text-xs text-slate-400">
+                                    chunk {source.chunk_id}
+                                  </span>
+                                </button>
+
+                                <p className="mt-2 text-xs leading-5 text-slate-500">
+                                  {source.preview ?? source.excerpt}
+                                </p>
+
+                                {expandedSource === sourceKey && (
+                                  <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl bg-white p-3 text-xs leading-5 text-slate-700 ring-1 ring-slate-200">
+                                    {source.excerpt}
+                                  </pre>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
 
             {uploadJob && (
               <div className="mx-auto w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-4 text-sm shadow-sm">
@@ -349,3 +630,4 @@ export default function Home() {
     </main>
   );
 }
+~`

@@ -1,28 +1,61 @@
 # Python
 __pycache__/
 *.py[cod]
-.venv/
+*.pyo
+*.pyd
 .pytest_cache/
+.mypy_cache/
 
-# Node
-node_modules/
-.next/
-out/
-dist/
-.env*.local
+# Python virtual environment
+backend/.venv/
+.venv/
+venv/
+
+# Environment variables and secrets
 .env
+.env.*
+!.env.example
 backend/.env
 frontend/.env.local
 
-# Runtime data (keep directory placeholders)
-data/raw/*
-data/extracted/*
-data/figures/*
-data/figure_notes/*
-data/vector_db/*
-data/metadata/*
-!data/**/.gitkeep
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+node_modules/
+.next/
 
-# OS/editor
+# Local AI data
+data/
+vector_db/
+chroma_db/
+models/
+cache/
+.cache/
+
+# Large model files
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# Uploaded documents and generated results
+*.pdf
+*.ppt
+*.pptx
+*.doc
+*.docx
+*.csv
+*.xlsx
+
+# Logs
+*.log
+logs/
+
+# OS / editor
 .DS_Store
+Thumbs.db
 .vscode/
+.idea/
