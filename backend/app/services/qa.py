@@ -40,7 +40,12 @@ class QAService:
         if query_type == QueryType.AGGREGATE_ANALYSIS:
             return self._aggregate_response(question, query_type)
 
-        hits = self._retrieve(question, query_type, top_k or self.settings.top_k)
+        search_question = self._build_search_question(question)
+        hits = self._retrieve(
+            search_question,
+            query_type,
+            top_k or self.settings.top_k,
+        )
         if not hits:
             return ChatResponse(
                 answer="제공된 문서 근거로는 확인할 수 없습니다.",
@@ -94,6 +99,85 @@ class QAService:
             {"role": "user", "content": user_prompt},
         ])
         return ChatResponse(answer=answer, sources=sources, query_type=query_type.value)
+
+
+    def _build_search_question(self, question: str) -> str:
+        """Build a compact retrieval query while preserving the full user question for generation."""
+        normalized = re.sub(r"[’`]", "'", question)
+
+        # Mixed Korean/English technical questions are searched primarily by
+        # their English engineering terms. This prevents instruction words
+        # such as "설명해줘", "변수", and "적용 조건" from diluting an exact
+        # keyword like Archie, Kick, BHP, or Wyllie.
+        english_terms = re.findall(
+            r"[A-Za-z][A-Za-z0-9_.-]*(?:'s)?",
+            normalized,
+        )
+
+        ignored_terms = {
+            "a",
+            "an",
+            "and",
+            "are",
+            "as",
+            "at",
+            "be",
+            "by",
+            "for",
+            "from",
+            "in",
+            "is",
+            "of",
+            "on",
+            "or",
+            "the",
+            "to",
+            "with",
+        }
+
+        compact_terms: list[str] = []
+        seen: set[str] = set()
+
+        for term in english_terms:
+            term = re.sub(r"'s$", "", term, flags=re.IGNORECASE)
+            key = term.lower()
+
+            if key in ignored_terms or key in seen:
+                continue
+
+            seen.add(key)
+            compact_terms.append(term)
+
+        if compact_terms:
+            return " ".join(compact_terms)
+
+        # Korean-only questions keep their technical content but remove common
+        # request phrasing that does not help document retrieval.
+        cleaned = question
+        request_patterns = [
+            r"업로드한\s*문서만\s*근거로",
+            r"문서\s*근거로",
+            r"문서명과\s*페이지\s*번호를\s*표시해줘",
+            r"사용한\s*문서명과\s*페이지\s*번호를\s*표시해줘",
+            r"근거가\s*없으면\s*추측하지\s*말고\s*없다고\s*말해줘",
+            r"설명해\s*줘",
+            r"설명해줘",
+            r"정리해\s*줘",
+            r"정리해줘",
+            r"알려\s*줘",
+            r"알려줘",
+        ]
+
+        for pattern in request_patterns:
+            cleaned = re.sub(
+                pattern,
+                " ",
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned or question
 
     def _retrieve(self, question: str, query_type: QueryType, top_k: int) -> list[dict]:
         if query_type == QueryType.DOCUMENT_OVERVIEW:
