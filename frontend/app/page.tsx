@@ -5,6 +5,7 @@ import { analyzeImage, askQuestion, ChatResponse, createUploadJob, getUploadJob,
 import { DocumentInfoPanel } from "@/components/DocumentInfoPanel";
 import { PlotPanel } from "@/components/PlotPanel";
 import { SystemStatusPanel } from "@/components/SystemStatusPanel";
+import { MarkdownMath } from "@/components/MarkdownMath";
 
 type ChatMessage = {
   id: string;
@@ -180,6 +181,61 @@ export default function Home() {
     setVision(null);
   }
 
+  function deleteSavedChat(chatId: string) {
+    const target = savedChats.find((chat) => chat.id === chatId);
+    const confirmed = window.confirm(
+      target
+        ? `"${target.title}" 대화를 삭제할까요?`
+        : "이 대화를 삭제할까요?",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setSavedChats((previous) => {
+      const next = previous.filter((chat) => chat.id !== chatId);
+
+      try {
+        window.localStorage.setItem(
+          CHAT_HISTORY_STORAGE_KEY,
+          JSON.stringify(next),
+        );
+      } catch (error) {
+        console.warn("대화 기록을 삭제하지 못했습니다.", error);
+      }
+
+      return next;
+    });
+
+    if (activeChatId === chatId) {
+      startNewChat();
+    }
+  }
+
+  function clearAllSavedChats() {
+    if (savedChats.length === 0) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `저장된 최근 대화 ${savedChats.length}개를 모두 삭제할까요?`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      window.localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
+    } catch (error) {
+      console.warn("전체 대화 기록을 삭제하지 못했습니다.", error);
+    }
+
+    setSavedChats([]);
+    startNewChat();
+  }
+
   async function onUpload() {
     if (!documentFiles.length) return;
     setBusy(true);
@@ -249,7 +305,11 @@ export default function Home() {
       };
 
       setMessages((previous) => [...previous, assistantMessage]);
-      setStatus("Answer generated from retrieved sources.");
+      setStatus(
+        result.sources?.length
+          ? "Answer generated from retrieved sources."
+          : "관련 문서 청크를 찾지 못했습니다.",
+      );
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "Question failed";
@@ -326,7 +386,21 @@ export default function Home() {
 
           <div className="space-y-5">
             <section>
-              <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Recent Chats</p>
+              <div className="mb-2 flex items-center justify-between px-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  Recent Chats
+                </p>
+                {savedChats.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearAllSavedChats}
+                    className="rounded-md px-2 py-1 text-[10px] font-medium text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                    title="최근 대화 전체 삭제"
+                  >
+                    전체 삭제
+                  </button>
+                )}
+              </div>
               <div className="space-y-1 text-sm">
                 {savedChats.length === 0 ? (
                   <p className="rounded-lg px-3 py-2 text-xs text-slate-400">
@@ -339,24 +413,42 @@ export default function Home() {
                       messages.length > 0;
 
                     return (
-                      <button
+                      <div
                         key={chat.id}
-                        type="button"
-                        onClick={() => openSavedChat(chat)}
-                        className={`w-full rounded-lg px-3 py-2 text-left transition ${
+                        className={`group flex items-center rounded-lg transition ${
                           isActive
-                            ? "bg-indigo-50 font-medium text-indigo-700"
-                            : "text-slate-600 hover:bg-white"
+                            ? "bg-indigo-50"
+                            : "hover:bg-white"
                         }`}
-                        title={chat.title}
                       >
-                        <span className="block truncate">
-                          💬 {chat.title}
-                        </span>
-                        <span className="mt-0.5 block text-[10px] text-slate-400">
-                          {formatChatDate(chat.updatedAt)}
-                        </span>
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => openSavedChat(chat)}
+                          className={`min-w-0 flex-1 px-3 py-2 text-left ${
+                            isActive
+                              ? "font-medium text-indigo-700"
+                              : "text-slate-600"
+                          }`}
+                          title={chat.title}
+                        >
+                          <span className="block truncate">
+                            💬 {chat.title}
+                          </span>
+                          <span className="mt-0.5 block text-[10px] text-slate-400">
+                            {formatChatDate(chat.updatedAt)}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => deleteSavedChat(chat.id)}
+                          className="mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 focus:opacity-100"
+                          aria-label={`${chat.title} 대화 삭제`}
+                          title="대화 삭제"
+                        >
+                          ✕
+                        </button>
+                      </div>
                     );
                   })
                 )}
@@ -495,9 +587,7 @@ export default function Home() {
                   </div>
 
                   <div className="max-w-[86%] rounded-3xl rounded-tl-md bg-white px-5 py-4 text-sm leading-7 text-slate-700 shadow-sm ring-1 ring-slate-200">
-                    <div className="whitespace-pre-wrap">
-                      {message.content}
-                    </div>
+                    <MarkdownMath content={message.content} />
 
                     {sourceCount > 0 && (
                       <div className="mt-5 border-t border-slate-100 pt-4">
