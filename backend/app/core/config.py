@@ -57,6 +57,10 @@ class Settings:
         )
     )
 
+    embedding_model_path: str | None = field(
+        default_factory=lambda: os.getenv("EMBEDDING_MODEL_PATH") or None
+    )
+
     collection_name: str = field(
         default_factory=lambda: os.getenv(
             "CHROMA_COLLECTION",
@@ -100,6 +104,46 @@ class Settings:
         )
     )
 
+    aggregate_batch_size: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGGREGATE_BATCH_SIZE", "500")
+        )
+    )
+
+    aggregate_max_results: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGGREGATE_MAX_RESULTS", "100")
+        )
+    )
+
+    aggregate_max_per_document: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGGREGATE_MAX_PER_DOCUMENT", "10")
+        )
+    )
+
+    aggregate_context_max_chunks: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGGREGATE_CONTEXT_MAX_CHUNKS", "24")
+        )
+    )
+
+    aggregate_context_max_characters: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGGREGATE_CONTEXT_MAX_CHARACTERS", "24000")
+        )
+    )
+
+    figure_note_min_confidence: float = field(
+        default_factory=lambda: float(
+            os.getenv("FIGURE_NOTE_MIN_CONFIDENCE", "0.5")
+        )
+    )
+
+    allow_legacy_figure_notes: bool = field(
+        default_factory=lambda: os.getenv("ALLOW_LEGACY_FIGURE_NOTES", "0") == "1"
+    )
+
     @property
     def raw_dir(self) -> Path:
         return self.data_dir / "raw"
@@ -124,6 +168,10 @@ class Settings:
     def metadata_dir(self) -> Path:
         return self.data_dir / "metadata"
 
+    @property
+    def evaluation_dir(self) -> Path:
+        return self.data_dir / "evaluation"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -136,6 +184,7 @@ def get_settings() -> Settings:
         settings.figure_notes_dir,
         settings.vector_db_dir,
         settings.metadata_dir,
+        settings.evaluation_dir,
     ]:
         directory.mkdir(
             parents=True,

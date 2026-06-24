@@ -147,10 +147,13 @@ class OllamaClient:
             return ""
 
         graph_prompt = prompt or (
-            "Analyze this petroleum engineering graph, plot, map, table, "
-            "or technical drawing. Describe axes, units, legend, "
-            "increasing/decreasing trends, important numeric values, "
-            "engineering meaning, and any uncertainty. "
+            "Analyze only what is directly visible in this image. "
+            "Do not assume it is a petroleum engineering figure. "
+            "If it is a logo, decorative image, page ornament, or non-technical photo, say it is not suitable for graph analysis. "
+            "If it is not a graph or chart, do not invent x-axis or y-axis values. "
+            "For graphs/charts, describe only readable axes, units, legend, trends, and numeric values. "
+            "If axes, units, or values are not readable, write '확인할 수 없음'. "
+            "Do not guess units or engineering meaning beyond the visible evidence. "
             "Answer in Korean unless labels require English."
         )
 

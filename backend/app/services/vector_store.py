@@ -1,4 +1,5 @@
 import math
+import os
 import re
 from typing import Any
 
@@ -68,6 +69,8 @@ ENGLISH_STOPWORDS = {
     "the",
     "to",
     "with",
+    "x",
+    "y",
 }
 
 KOREAN_STOPWORDS = {
@@ -94,6 +97,33 @@ KOREAN_STOPWORDS = {
     "적용 조건",
     "조건",
 }
+
+LOW_VALUE_MARKERS = (
+    "nomenclature",
+    "symbol list",
+    "symbols",
+    "index",
+    "table of contents",
+    "contents",
+    "learning objectives",
+    "references",
+)
+
+HIGH_VALUE_MARKERS = (
+    "equation",
+    "definition",
+    "defined as",
+    "is given by",
+    "is expressed as",
+    "archie",
+    "bottomhole pressure",
+    "bottom-hole pressure",
+    "bottom hole pressure",
+    "bhp",
+    "mud weight",
+    "pressure gradient",
+    "formation resistivity factor",
+)
 
 
 def _contains_term(text: str, term: str) -> bool:
@@ -151,21 +181,15 @@ class VectorStore:
         self.embedding_device = (
             "cuda" if torch.cuda.is_available() else "cpu"
         )
-        self.embedding_model = SentenceTransformer(
-            settings.embedding_model,
-            device=self.embedding_device,
-        )
-
-        print(
-            f"[임베딩 모델] {settings.embedding_model} / "
-            f"device={self.embedding_device}"
-        )
+        self.embedding_model: SentenceTransformer | None = None
+        self.embedding_model_error: RuntimeError | None = None
+        self.last_aggregate_debug: dict[str, Any] = {}
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
 
-        vectors = self.embedding_model.encode(
+        vectors = self._get_embedding_model().encode(
             texts,
             batch_size=16,
             normalize_embeddings=True,
@@ -320,28 +344,14 @@ class VectorStore:
             data.get("metadatas", []),
         ):
             text = str(document or "")
-            lower = text.lower()
-            exact_matches = sum(1 for token in tokens if _matches_token(lower, token))
-
-            if exact_matches == 0:
+            keyword_score = self._keyword_score(
+                text,
+                tokens,
+                metadata or {},
+                prefer_metadata,
+            )
+            if keyword_score <= 0:
                 continue
-
-            phrase_match = any(" " in token and _matches_token(lower, token) for token in tokens)
-            token_score = min(1.0, exact_matches / max(min(len(tokens), 3), 1))
-            density = min(
-                1.0,
-                exact_matches
-                / max(math.log(len(text) + 10), 1),
-            )
-            exact_floor = 0.8 if phrase_match else 0.65
-            keyword_score = min(
-                1.0,
-                max(exact_floor, 0.75 * token_score + 0.25 * density)
-                + self._metadata_boost(
-                    metadata or {},
-                    prefer_metadata,
-                ),
-            )
 
             hits.append(
                 {
@@ -360,6 +370,124 @@ class VectorStore:
             ),
             reverse=True,
         )[:top_k]
+
+    def aggregate_keyword_search(
+        self,
+        question: str,
+        batch_size: int,
+        max_results: int,
+        max_per_document: int,
+    ) -> list[dict[str, Any]]:
+        tokens = self._keyword_tokens(question)
+        self.last_aggregate_debug = {
+            "total_scanned_chunks": 0,
+            "keyword_matched_chunks": 0,
+            "deduplicated_chunks": 0,
+            "deduplicated_documents": 0,
+            "deduplicated_pages": 0,
+            "dropped_by_document_limit": 0,
+        }
+        if not tokens:
+            return []
+
+        merged: dict[tuple[str, int], dict[str, Any]] = {}
+        offset = 0
+
+        while True:
+            batch = self.collection.get(
+                include=["documents", "metadatas"],
+                limit=batch_size,
+                offset=offset,
+            )
+            ids = batch.get("ids", [])
+            if not ids:
+                break
+
+            for chunk_id, document, metadata in zip(
+                ids,
+                batch.get("documents", []),
+                batch.get("metadatas", []),
+            ):
+                self.last_aggregate_debug["total_scanned_chunks"] += 1
+                text = str(document or "")
+                meta = metadata or {}
+                score = self._keyword_score(text, tokens, meta, None)
+                if score <= 0:
+                    continue
+                self.last_aggregate_debug["keyword_matched_chunks"] += 1
+
+                try:
+                    page = int(meta.get("page"))
+                except (TypeError, ValueError):
+                    page = -1
+
+                key = (
+                    str(meta.get("document_id") or meta.get("document") or ""),
+                    page,
+                )
+                current = merged.get(key)
+                candidate = {
+                    "id": str(chunk_id),
+                    "text": text,
+                    "metadata": meta,
+                    "distance": None,
+                    "vector_score": 0.0,
+                    "keyword_score": score,
+                    "score": score,
+                }
+
+                if current is None or score > float(current.get("score") or 0.0):
+                    merged[key] = candidate
+                elif current is not None and len(str(current.get("text") or "")) < 1800:
+                    current["text"] = (
+                        str(current.get("text") or "").rstrip()
+                        + "\n\n"
+                        + text[:800].strip()
+                    )
+
+            offset += batch_size
+
+        ordered = sorted(
+            merged.values(),
+            key=lambda item: float(item.get("score") or 0.0),
+            reverse=True,
+        )
+
+        per_document_count: dict[str, int] = {}
+        results: list[dict[str, Any]] = []
+        for hit in ordered:
+            metadata = hit.get("metadata") or {}
+            document_key = str(metadata.get("document_id") or metadata.get("document") or "")
+            count = per_document_count.get(document_key, 0)
+            if count >= max_per_document:
+                self.last_aggregate_debug["dropped_by_document_limit"] += 1
+                continue
+            per_document_count[document_key] = count + 1
+            results.append(hit)
+            if len(results) >= max_results:
+                break
+
+        self.last_aggregate_debug.update(
+            {
+                "deduplicated_chunks": len(ordered),
+                "deduplicated_documents": len(
+                    {
+                        str((hit.get("metadata") or {}).get("document_id") or (hit.get("metadata") or {}).get("document") or "")
+                        for hit in ordered
+                    }
+                ),
+                "deduplicated_pages": len(
+                    {
+                        (
+                            str((hit.get("metadata") or {}).get("document_id") or (hit.get("metadata") or {}).get("document") or ""),
+                            (hit.get("metadata") or {}).get("page"),
+                        )
+                        for hit in ordered
+                    }
+                ),
+            }
+        )
+        return results
 
     def expand_with_neighbors(
         self,
@@ -463,6 +591,80 @@ class VectorStore:
 
     def _keyword_tokens(self, question: str) -> list[str]:
         return expand_query_terms(question)
+
+    def _keyword_score(
+        self,
+        text: str,
+        tokens: list[str],
+        metadata: dict[str, Any],
+        prefer_metadata: dict[str, Any] | None,
+    ) -> float:
+        lower = text.lower()
+        exact_matches = sum(1 for token in tokens if _matches_token(lower, token))
+
+        if exact_matches == 0:
+            return 0.0
+
+        phrase_match = any(" " in token and _matches_token(lower, token) for token in tokens)
+        token_score = min(1.0, exact_matches / max(min(len(tokens), 3), 1))
+        density = min(
+            1.0,
+            exact_matches
+            / max(math.log(len(text) + 10), 1),
+        )
+        exact_floor = 0.8 if phrase_match else 0.65
+        score = min(
+            1.0,
+            max(exact_floor, 0.75 * token_score + 0.25 * density)
+            + self._metadata_boost(
+                metadata or {},
+                prefer_metadata,
+            ),
+        )
+        if any(marker in lower for marker in HIGH_VALUE_MARKERS):
+            score = min(1.0, score + 0.12)
+        if any(marker in lower for marker in LOW_VALUE_MARKERS):
+            score *= 0.35
+        return score
+
+    def _get_embedding_model(self) -> SentenceTransformer:
+        if self.embedding_model is not None:
+            return self.embedding_model
+        if self.embedding_model_error is not None:
+            raise self.embedding_model_error
+
+        model_name = self.settings.embedding_model
+        if self.settings.embedding_model_path:
+            model_path = self.settings.embedding_model_path
+            if not os.path.exists(model_path):
+                raise RuntimeError(
+                    f"Embedding model path does not exist: {model_path}. "
+                    "Set EMBEDDING_MODEL_PATH to a local BGE-M3 directory or unset it to use EMBEDDING_MODEL."
+                )
+            model_name = model_path
+
+        try:
+            self.embedding_model = SentenceTransformer(
+                model_name,
+                device=self.embedding_device,
+            )
+        except Exception as exc:
+            offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("TRANSFORMERS_OFFLINE") == "1"
+            hint = (
+                " Local offline mode is enabled; set EMBEDDING_MODEL_PATH to a downloaded model directory."
+                if offline
+                else " Download the model once or set EMBEDDING_MODEL_PATH to a local model directory."
+            )
+            self.embedding_model_error = RuntimeError(
+                f"Could not load embedding model `{model_name}`.{hint}"
+            )
+            raise self.embedding_model_error from exc
+
+        print(
+            f"[임베딩 모델] {model_name} / "
+            f"device={self.embedding_device}"
+        )
+        return self.embedding_model
 
     def _metadata_boost(
         self,

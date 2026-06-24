@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageStat, UnidentifiedImageError
 
 from app.core.config import Settings
 from app.models.schemas import DocumentRecord
@@ -58,25 +60,180 @@ class DocumentProcessor:
         )
 
     @staticmethod
-    def should_analyze_image(image_path: Path) -> bool:
-        """Return True only for images large enough to contain a useful figure."""
+    def classify_image_candidate(image_path: Path) -> dict[str, object]:
+        """Classify obvious non-figure images before spending a vision call."""
         try:
-            if image_path.stat().st_size < 20_000:
-                return False
+            file_size = image_path.stat().st_size
 
             with Image.open(image_path) as image:
                 width, height = image.size
+                rgb_image = image.convert("RGB").resize((64, 64))
+                stat = ImageStat.Stat(rgb_image)
 
-            if width < 350 or height < 250:
-                return False
+            area = width * height
+            aspect_ratio = width / max(height, 1)
+            contrast = sum(stat.stddev) / max(len(stat.stddev), 1)
 
-            if width * height < 150_000:
-                return False
+            result: dict[str, object] = {
+                "image_type": "unknown",
+                "confidence": 0.6,
+                "should_analyze": True,
+                "width": width,
+                "height": height,
+                "file_size": file_size,
+                "contrast": round(float(contrast), 2),
+                "reason": "",
+            }
 
-            return True
+            if file_size < 20_000 or width < 350 or height < 250 or area < 150_000:
+                result.update(
+                    {
+                        "image_type": "decorative",
+                        "confidence": 0.1,
+                        "should_analyze": False,
+                        "reason": "too small or low resolution",
+                    }
+                )
+                return result
+
+            if contrast < 8:
+                result.update(
+                    {
+                        "image_type": "decorative",
+                        "confidence": 0.1,
+                        "should_analyze": False,
+                        "reason": "nearly monochrome",
+                    }
+                )
+                return result
+
+            if aspect_ratio > 8 or aspect_ratio < 0.125:
+                result.update(
+                    {
+                        "image_type": "decorative",
+                        "confidence": 0.2,
+                        "should_analyze": False,
+                        "reason": "extreme aspect ratio",
+                    }
+                )
+                return result
+
+            if height < 320 and width < 900:
+                result.update(
+                    {
+                        "image_type": "logo",
+                        "confidence": 0.35,
+                        "should_analyze": False,
+                        "reason": "small banner/logo-like image",
+                    }
+                )
+                return result
+
+            return result
 
         except (OSError, ValueError, UnidentifiedImageError):
-            return False
+            return {
+                "image_type": "unknown",
+                "confidence": 0.0,
+                "should_analyze": False,
+                "reason": "unreadable image",
+            }
+
+    @staticmethod
+    def should_analyze_image(image_path: Path) -> bool:
+        """Return True only for images large enough to contain a useful figure."""
+        return bool(DocumentProcessor.classify_image_candidate(image_path).get("should_analyze"))
+
+    def build_figure_note(
+        self,
+        *,
+        document_name: str,
+        page_number: int,
+        image_index: int,
+        image_path: Path,
+        note: str,
+        page_text: str,
+        candidate: dict[str, object],
+    ) -> str:
+        metadata = self._classify_figure_note(note, candidate)
+        related_text = re.sub(r"\s+", " ", page_text).strip()[:800]
+        return "\n".join(
+            [
+                "[Figure Note Metadata]",
+                f"Document: {document_name}",
+                f"Page: {page_number}",
+                f"Image Path: {image_path}",
+                f"image_path: {image_path}",
+                f"Image Number: {image_index}",
+                f"Image Type: {metadata['image_type']}",
+                f"image_type: {metadata['image_type']}",
+                f"Confidence: {metadata['confidence']}",
+                f"confidence: {metadata['confidence']}",
+                f"X Axis Confirmed: {metadata['x_axis_confirmed']}",
+                f"x_axis_verified: {metadata['x_axis_confirmed']}",
+                f"Y Axis Confirmed: {metadata['y_axis_confirmed']}",
+                f"y_axis_verified: {metadata['y_axis_confirmed']}",
+                f"Units Confirmed: {metadata['units_confirmed']}",
+                f"units_verified: {metadata['units_confirmed']}",
+                f"Analysis Model: {self.settings.vision_model}",
+                f"Created At: {datetime.now(timezone.utc).isoformat()}",
+                f"Related Page Text: {related_text}",
+                "",
+                "[Analysis]",
+                note,
+            ]
+        )
+
+    def _classify_figure_note(self, note: str, candidate: dict[str, object]) -> dict[str, object]:
+        lower = note.lower()
+        image_type = str(candidate.get("image_type") or "unknown")
+        if image_type in {"logo", "decorative"}:
+            base_confidence = float(candidate.get("confidence") or 0.0)
+        else:
+            base_confidence = 0.55
+
+        if any(term in lower for term in ["x-axis", "y-axis", "axis", "legend", "trend", "plot", "graph", "x축", "y축"]):
+            image_type = "graph"
+            base_confidence = 0.75
+        elif any(term in lower for term in ["chart", "bar chart", "line chart"]):
+            image_type = "chart"
+            base_confidence = 0.7
+        elif "table" in lower or "표" in note:
+            image_type = "table"
+            base_confidence = 0.65
+        elif any(term in lower for term in ["equation", "formula", "수식"]):
+            image_type = "equation"
+            base_confidence = 0.65
+        elif any(term in lower for term in ["logo", "decorative", "장식"]):
+            image_type = "logo"
+            base_confidence = 0.2
+        elif any(term in lower for term in ["photograph", "photo", "image shows"]):
+            image_type = "photograph"
+            base_confidence = 0.45
+
+        uncertainty_penalty = lower.count("확인할 수 없음") * 0.08 + lower.count("cannot determine") * 0.08
+        x_axis = any(term in lower for term in ["x-axis", "x axis", "x축"])
+        y_axis = any(term in lower for term in ["y-axis", "y axis", "y축"])
+        units = any(term in lower for term in ["unit", "units", "단위", "psi", "ft", "ppg", "sg"])
+        confidence = max(0.0, min(1.0, base_confidence - uncertainty_penalty))
+
+        return {
+            "image_type": image_type,
+            "confidence": round(confidence, 2),
+            "x_axis_confirmed": x_axis,
+            "y_axis_confirmed": y_axis,
+            "units_confirmed": units,
+        }
+
+    @staticmethod
+    def _figure_note_confidence(note: str) -> float:
+        match = re.search(r"^Confidence:\s*([0-9.]+)", note, flags=re.MULTILINE)
+        if not match:
+            return 0.5
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return 0.0
 
     async def extract(
         self,
@@ -168,6 +325,16 @@ class DocumentProcessor:
 
         note = await self.ollama.describe_image(target)
         if note.strip():
+            candidate = self.classify_image_candidate(target)
+            note = self.build_figure_note(
+                document_name=file_path.name,
+                page_number=1,
+                image_index=1,
+                image_path=target,
+                note=note,
+                page_text="",
+                candidate=candidate,
+            )
             note_path = self.settings.figure_notes_dir / f"{target.stem}.md"
             note_path.write_text(note, encoding="utf-8")
 
@@ -294,6 +461,7 @@ class DocumentProcessor:
                         continue
 
                     note = note_cache.get(xref, "")
+                    candidate = self.classify_image_candidate(figure_path)
                     note_path = (
                         self.settings.figure_notes_dir
                         / f"{figure_path.stem}.md"
@@ -311,7 +479,7 @@ class DocumentProcessor:
                         if vision_calls >= MAX_FIGURE_ANALYSES:
                             continue
 
-                        if not self.should_analyze_image(figure_path):
+                        if not candidate.get("should_analyze"):
                             continue
 
                         vision_calls += 1
@@ -321,7 +489,7 @@ class DocumentProcessor:
                         )
 
                         try:
-                            note = (
+                            raw_note = (
                                 await self.ollama.describe_image(
                                     figure_path
                                 )
@@ -332,10 +500,19 @@ class DocumentProcessor:
                                 f"{figure_path.name}: "
                                 f"{type(exc).__name__}: {exc}"
                             )
-                            note = ""
+                            raw_note = ""
 
                         # 실패한 빈 결과는 저장하지 않음
-                        if note:
+                        if raw_note:
+                            note = self.build_figure_note(
+                                document_name=file_path.name,
+                                page_number=page_number,
+                                image_index=image_index,
+                                image_path=figure_path,
+                                note=raw_note,
+                                page_text=combined,
+                                candidate=candidate,
+                            )
                             note_path.write_text(
                                 note,
                                 encoding="utf-8",
@@ -343,7 +520,7 @@ class DocumentProcessor:
 
                     note_cache[xref] = note
 
-                    if note:
+                    if note and self._figure_note_confidence(note) >= self.settings.figure_note_min_confidence:
                         figure_notes.append(
                             f"Figure {image_index}: {note}"
                         )
