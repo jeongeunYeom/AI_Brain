@@ -12,6 +12,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.core.config import Settings
 from app.services.document_processor import DocumentProcessor
+from app.services.ollama import OllamaClient
 
 
 def find_image(settings: Settings, note_path: Path) -> Path | None:
@@ -36,7 +37,8 @@ def reprocess_notes(
     apply: bool,
     update_chroma: bool,
 ) -> dict[str, int]:
-    processor = DocumentProcessor(settings)
+    ollama = OllamaClient(settings)
+    processor = DocumentProcessor(settings, ollama)
     counts = {"processed": 0, "skipped": 0, "failed": 0}
 
     for note_path in sorted(settings.figure_notes_dir.glob("*.md")):

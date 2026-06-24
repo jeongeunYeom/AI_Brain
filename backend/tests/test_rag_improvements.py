@@ -1,4 +1,7 @@
 import asyncio
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from PIL import Image
@@ -210,3 +213,28 @@ def test_evaluator_rejects_invented_mud_weight_symbols():
     )
 
     assert checks["mud_conversion_no_invented_r_symbols"]["ok"] is False
+
+
+def test_reprocess_figure_notes_cli_entrypoints(tmp_path: Path):
+    env = os.environ.copy()
+    env["DATA_DIR"] = str(tmp_path)
+    backend_root = Path(__file__).resolve().parents[1]
+
+    commands = [
+        [sys.executable, "scripts/reprocess_figure_notes.py", "--help"],
+        [sys.executable, "scripts/reprocess_figure_notes.py"],
+        [sys.executable, "-m", "scripts.reprocess_figure_notes", "--document", "missing.pdf"],
+    ]
+
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=backend_root,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+        )
+        assert result.returncode == 0, result.stderr
+
+    assert not list(tmp_path.rglob("*.bak.md"))
