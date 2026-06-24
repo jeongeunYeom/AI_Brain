@@ -9,6 +9,134 @@ from sentence_transformers import SentenceTransformer
 from app.core.config import Settings
 
 
+TECHNICAL_TERM_EXPANSIONS: dict[str, list[str]] = {
+    "archie": [
+        "Archie's equation",
+        "Archie law",
+        "formation resistivity factor",
+        "water saturation",
+        "cementation exponent",
+        "saturation exponent",
+    ],
+    "archie's equation": ["Archie", "Archie law", "formation resistivity factor"],
+    "archie law": ["Archie", "Archie's equation", "formation resistivity factor"],
+    "ecd": [
+        "Equivalent Circulating Density",
+        "circulating density",
+        "annular pressure loss",
+        "dynamic mud density",
+    ],
+    "equivalent circulating density": ["ECD", "circulating density", "annular pressure loss"],
+    "bhp": [
+        "bottomhole pressure",
+        "bottom-hole pressure",
+        "bottom hole pressure",
+        "wellbore pressure",
+    ],
+    "bottomhole pressure": ["BHP", "bottom-hole pressure", "bottom hole pressure", "wellbore pressure"],
+    "bottom-hole pressure": ["BHP", "bottomhole pressure", "bottom hole pressure", "wellbore pressure"],
+    "bottom hole pressure": ["BHP", "bottomhole pressure", "bottom-hole pressure", "wellbore pressure"],
+    "mud weight": ["ppg", "pounds per gallon", "SG", "specific gravity", "mud density"],
+    "pore pressure": ["formation pressure", "kick", "mud weight window"],
+    "fracture pressure": ["fracture gradient", "lost circulation", "mud weight window"],
+    "kick": ["pore pressure", "formation pressure", "underbalanced"],
+    "lost circulation": ["fracture pressure", "fracture gradient", "losses"],
+    "sg": ["specific gravity", "mud density"],
+    "specific gravity": ["SG", "mud density"],
+    "ppg": ["pounds per gallon", "mud weight"],
+    "pounds per gallon": ["ppg", "mud weight"],
+    "psi/ft": ["pressure gradient", "mud weight", "specific gravity", "SG"],
+    "formation resistivity factor": ["Archie", "Archie's equation", "resistivity"],
+}
+
+ENGLISH_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+
+KOREAN_STOPWORDS = {
+    "각",
+    "각 변수",
+    "문서",
+    "문서에서",
+    "문서의",
+    "문서만",
+    "문서별로",
+    "근거",
+    "무엇",
+    "설명",
+    "설명해줘",
+    "제시",
+    "제시하고",
+    "정리",
+    "정리해줘",
+    "찾아",
+    "찾아줘",
+    "모두",
+    "전부",
+    "의미",
+    "적용 조건",
+    "조건",
+}
+
+
+def _contains_term(text: str, term: str) -> bool:
+    escaped = re.escape(term.lower())
+    return re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", text) is not None
+
+
+def _matches_token(text: str, token: str) -> bool:
+    normalized = token.lower()
+    if re.fullmatch(r"[a-z0-9]+", normalized):
+        return _contains_term(text, normalized)
+    return normalized in text
+
+
+def expand_query_terms(question: str) -> list[str]:
+    normalized = re.sub(r"[’`]", "'", question).lower()
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        key = value.lower()
+        if key and key not in seen:
+            seen.add(key)
+            terms.append(value)
+
+    for term, expansions in TECHNICAL_TERM_EXPANSIONS.items():
+        if _contains_term(normalized, term):
+            add(term)
+            for expansion in expansions:
+                add(expansion)
+
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_./-]*(?:'s)?|\d+(?:\.\d+)?", question):
+        cleaned = re.sub(r"'s$", "", token, flags=re.IGNORECASE)
+        if cleaned.lower() not in ENGLISH_STOPWORDS:
+            add(cleaned)
+
+    for token in re.findall(r"[가-힣]{2,}", question):
+        if token not in KOREAN_STOPWORDS:
+            add(token)
+
+    return terms
+
+
 class VectorStore:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -147,10 +275,14 @@ class VectorStore:
                 hit.get("metadata") or {},
                 prefer_metadata,
             )
-            hit["score"] = (
+            blended_score = (
                 (1 - keyword_weight) * vector_score
                 + keyword_weight * keyword_score
                 + metadata_boost
+            )
+            hit["score"] = max(
+                blended_score,
+                min(1.0, keyword_score + metadata_boost),
             )
 
         hits = [
@@ -189,25 +321,22 @@ class VectorStore:
         ):
             text = str(document or "")
             lower = text.lower()
-            exact_matches = sum(
-                1
-                for token in tokens
-                if token.lower() in lower
-            )
+            exact_matches = sum(1 for token in tokens if _matches_token(lower, token))
 
             if exact_matches == 0:
                 continue
 
-            token_score = exact_matches / max(len(tokens), 1)
+            phrase_match = any(" " in token and _matches_token(lower, token) for token in tokens)
+            token_score = min(1.0, exact_matches / max(min(len(tokens), 3), 1))
             density = min(
                 1.0,
                 exact_matches
                 / max(math.log(len(text) + 10), 1),
             )
+            exact_floor = 0.8 if phrase_match else 0.65
             keyword_score = min(
                 1.0,
-                0.75 * token_score
-                + 0.25 * density
+                max(exact_floor, 0.75 * token_score + 0.25 * density)
                 + self._metadata_boost(
                     metadata or {},
                     prefer_metadata,
@@ -231,6 +360,77 @@ class VectorStore:
             ),
             reverse=True,
         )[:top_k]
+
+    def expand_with_neighbors(
+        self,
+        hits: list[dict[str, Any]],
+        max_total: int,
+    ) -> list[dict[str, Any]]:
+        if not hits or len(hits) >= max_total:
+            return hits[:max_total]
+
+        data = self.collection.get(include=["documents", "metadatas"])
+        by_id: dict[str, dict[str, Any]] = {}
+        by_doc_page_chunk: dict[tuple[str, int, int], str] = {}
+        first_chunk_by_doc_page: dict[tuple[str, int], str] = {}
+
+        for chunk_id, document, metadata in zip(
+            data.get("ids", []),
+            data.get("documents", []),
+            data.get("metadatas", []),
+        ):
+            meta = metadata or {}
+            doc_id = str(meta.get("document_id") or meta.get("document") or "")
+            try:
+                page = int(meta.get("page"))
+                chunk_index = int(meta.get("chunk_index", 0))
+            except (TypeError, ValueError):
+                continue
+
+            by_id[str(chunk_id)] = {
+                "id": str(chunk_id),
+                "text": str(document or ""),
+                "metadata": meta,
+                "distance": None,
+                "vector_score": 0.0,
+                "keyword_score": 0.0,
+                "score": 0.0,
+                "neighbor": True,
+            }
+            by_doc_page_chunk[(doc_id, page, chunk_index)] = str(chunk_id)
+            first_chunk_by_doc_page.setdefault((doc_id, page), str(chunk_id))
+
+        merged = {str(hit["id"]): hit for hit in hits}
+
+        for hit in hits:
+            metadata = hit.get("metadata") or {}
+            doc_id = str(metadata.get("document_id") or metadata.get("document") or "")
+            try:
+                page = int(metadata.get("page"))
+                chunk_index = int(metadata.get("chunk_index", 0))
+            except (TypeError, ValueError):
+                continue
+
+            candidate_ids = [
+                by_doc_page_chunk.get((doc_id, page, chunk_index - 1)),
+                by_doc_page_chunk.get((doc_id, page, chunk_index + 1)),
+                by_doc_page_chunk.get((doc_id, page - 1, chunk_index)),
+                first_chunk_by_doc_page.get((doc_id, page - 1)),
+                by_doc_page_chunk.get((doc_id, page + 1, chunk_index)),
+                first_chunk_by_doc_page.get((doc_id, page + 1)),
+            ]
+
+            for candidate_id in candidate_ids:
+                if not candidate_id or candidate_id in merged:
+                    continue
+                neighbor = dict(by_id[candidate_id])
+                seed_score = float(hit.get("score") or 0.0)
+                neighbor["score"] = min(seed_score * 0.6, 0.45)
+                merged[candidate_id] = neighbor
+                if len(merged) >= max_total:
+                    return list(merged.values())[:max_total]
+
+        return list(merged.values())[:max_total]
 
     def count(self) -> int:
         return self.collection.count()
@@ -262,30 +462,7 @@ class VectorStore:
         return hits
 
     def _keyword_tokens(self, question: str) -> list[str]:
-        tokens = re.findall(
-            r"[A-Za-z][A-Za-z0-9_./-]*|[가-힣]{2,}|"
-            r"\d+(?:\.\d+)?",
-            question,
-        )
-        stopwords = {
-            "this",
-            "that",
-            "from",
-            "with",
-            "문서",
-            "에서",
-            "무엇",
-            "설명",
-            "정리",
-            "찾아줘",
-            "모두",
-            "의미",
-        }
-        return [
-            token
-            for token in tokens
-            if token.lower() not in stopwords
-        ]
+        return expand_query_terms(question)
 
     def _metadata_boost(
         self,
