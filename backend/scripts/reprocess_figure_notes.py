@@ -15,6 +15,10 @@ from app.services.document_processor import DocumentProcessor
 from app.services.ollama import OllamaClient
 
 
+def normalize_document_key(value: str) -> str:
+    return "".join(ch.lower() for ch in value if ch.isalnum())
+
+
 def find_image(settings: Settings, note_path: Path) -> Path | None:
     for suffix in [".png", ".jpg", ".jpeg", ".webp"]:
         candidate = settings.figures_dir / f"{note_path.stem}{suffix}"
@@ -26,8 +30,8 @@ def find_image(settings: Settings, note_path: Path) -> Path | None:
 def matches_document(note_path: Path, content: str, document: str | None) -> bool:
     if not document:
         return True
-    needle = document.lower()
-    return needle in note_path.name.lower() or needle in content.lower()
+    needle = normalize_document_key(document)
+    return needle in normalize_document_key(note_path.name) or needle in normalize_document_key(content)
 
 
 def reprocess_notes(
@@ -39,25 +43,46 @@ def reprocess_notes(
 ) -> dict[str, int]:
     ollama = OllamaClient(settings)
     processor = DocumentProcessor(settings, ollama)
-    counts = {"processed": 0, "skipped": 0, "failed": 0}
+    counts = {
+        "scanned": 0,
+        "document_matches": 0,
+        "processed": 0,
+        "skipped_document_mismatch": 0,
+        "skipped_already_structured": 0,
+        "skipped_missing_image": 0,
+        "skipped_missing_metadata": 0,
+        "skipped_invalid_note": 0,
+        "skipped_low_quality": 0,
+        "failed": 0,
+    }
+
+    if document:
+        print("document filter fields: note filename, note content")
 
     for note_path in sorted(settings.figure_notes_dir.glob("*.md")):
+        counts["scanned"] += 1
         try:
             content = note_path.read_text(encoding="utf-8")
             if not matches_document(note_path, content, document):
-                counts["skipped"] += 1
+                counts["skipped_document_mismatch"] += 1
                 continue
+            counts["document_matches"] += 1
             if "[Figure Note Metadata]" in content:
-                counts["skipped"] += 1
+                counts["skipped_already_structured"] += 1
+                continue
+            if not content.strip():
+                counts["skipped_invalid_note"] += 1
                 continue
 
             image_path = find_image(settings, note_path)
             if image_path is None:
-                counts["failed"] += 1
-                print(f"FAIL no image: {note_path}")
+                counts["skipped_missing_image"] += 1
                 continue
 
             candidate = processor.classify_image_candidate(image_path)
+            if not candidate.get("should_analyze"):
+                counts["skipped_low_quality"] += 1
+                continue
             structured_note = processor.build_figure_note(
                 document_name=document or note_path.stem,
                 page_number=0,
@@ -102,9 +127,7 @@ def main() -> int:
         update_chroma=args.update_chroma,
     )
     print(
-        "processed={processed} skipped={skipped} failed={failed}".format(
-            **counts
-        )
+        "\n".join(f"{key}={value}" for key, value in counts.items())
     )
     return 0
 

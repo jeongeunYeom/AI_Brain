@@ -185,7 +185,12 @@ class QAService:
         if (
             re.search(r"mud weight", question, re.IGNORECASE)
             and re.search(r"psi/ft|sg|psi|ft", question, re.IGNORECASE)
-            and (not sources or not all(term in answer.lower() for term in ["0.052", "0.433", "ppg", "psi/ft", "sg"]))
+            and (
+                not sources
+                or self._has_invented_mud_weight_symbol(answer)
+                or "$$" not in answer
+                or not all(term in answer.lower() for term in ["0.052", "0.433", "ppg", "psi/ft", "sg"])
+            )
         ):
             answer, sources = self._mud_conversion_fallback_answer(sources_by_id)
         if not sources and re.search(r"mud weight window|pore pressure|fracture pressure|kick|lost circulation", question, re.IGNORECASE):
@@ -447,18 +452,7 @@ class QAService:
         per_document: dict[str, int] = {}
 
         for source_id, source in sources_by_id.items():
-            low_value_text = f"{source.document} {source.excerpt}".lower()
-            if any(
-                marker in low_value_text
-                for marker in [
-                    "table of contents",
-                    "nomenclature",
-                    "symbol list",
-                    "learning objectives",
-                    "references",
-                    "index",
-                ]
-            ):
+            if self._is_low_value_source(source):
                 continue
             count = per_document.get(source.document, 0)
             if count >= 2:
@@ -481,9 +475,9 @@ class QAService:
         final_sources: list[Source] = []
         for index, (_, source) in enumerate(selected, start=1):
             final_id = f"S{index}"
-            preview = (source.preview or self._preview(source.excerpt, 220)).replace("|", "/")
+            preview = self._aggregate_summary(source).replace("|", "/")
             lines.append(
-                f"| {source.document} | {source.page or ''} | {preview} | 검색된 대표 청크 기준 | [{final_id}] |"
+                f"| {source.document} | {source.page or ''} | {preview} | 해당 없음 | [{final_id}] |"
             )
             final_sources.append(source)
 
@@ -494,10 +488,43 @@ class QAService:
 
     def _first_source_matching(self, sources_by_id: dict[str, Source], patterns: list[str]) -> Source | None:
         for source in sources_by_id.values():
+            if self._is_low_value_source(source):
+                continue
             excerpt = source.excerpt.lower()
             if all(re.search(pattern, excerpt, re.IGNORECASE) for pattern in patterns):
                 return source
         return None
+
+    def _is_low_value_source(self, source: Source) -> bool:
+        text = f"{source.document} {source.excerpt}".lower()
+        return any(
+            marker in text
+            for marker in [
+                "table of contents",
+                "c o n t e n t s",
+                "contents",
+                "nomenclature",
+                "symbol list",
+                "learning objectives",
+                "references",
+                "subject index",
+                "author index",
+            ]
+        )
+
+    def _summary_sentence(self, text: str, limit: int = 220) -> str:
+        compact = re.sub(r"\s+", " ", text).strip()
+        sentence = re.split(r"(?<=[.!?])\s+", compact)[0]
+        return sentence[:limit]
+
+    def _aggregate_summary(self, source: Source) -> str:
+        compact = re.sub(r"\s+", " ", source.excerpt).strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", compact):
+            if re.search(r"bottom\s*-?\s*hole pressure|bottomhole pressure|\bbhp\b|\bpwf\b|\bpws\b", sentence, re.IGNORECASE):
+                return sentence[:220]
+        if re.search(r"bottom\s*-?\s*hole pressure|bottomhole pressure|\bbhp\b|\bpwf\b|\bpws\b", compact, re.IGNORECASE):
+            return "Bottomhole pressure/BHP 관련 압력 거동 또는 해석 근거입니다."
+        return self._summary_sentence(source.excerpt)
 
     def _ecd_fallback_answer(self, sources_by_id: dict[str, Source]) -> tuple[str, list[Source]]:
         source = self._first_source_matching(sources_by_id, [r"\becd\b", r"0\.052", r"\bmw\b"])
@@ -541,20 +568,29 @@ class QAService:
         return answer, [source]
 
     def _mud_window_fallback_answer(self, sources_by_id: dict[str, Source]) -> tuple[str, list[Source]]:
-        source = self._first_source_matching(
+        kick_source = self._first_source_matching(
             sources_by_id,
-            [r"pore pressure|formation pressure", r"fracture pressure|fracture"],
+            [r"kick|influx|flow", r"formation fluid|enter|hydrostatic|pore pressure|formation pressure"],
         )
-        if source is None:
+        loss_source = self._first_source_matching(
+            sources_by_id,
+            [r"lost circulation|loss|fracture|breakdown", r"fracture pressure|fracture gradient|exceed|breakdown"],
+        )
+        if kick_source is None or loss_source is None:
             return self._refusal_for_question(""), []
+        sources = [kick_source]
+        loss_id = "S1"
+        if loss_source.chunk_id != kick_source.chunk_id:
+            sources.append(loss_source)
+            loss_id = "S2"
         answer = (
             "Mud weight window는 borehole pressure가 pore pressure보다 낮아지지 않고 fracture pressure를 넘지 않는 범위입니다. [S1]\n\n"
             "- Mud weight가 pore pressure보다 낮으면 formation fluid가 wellbore로 유입되어 kick 또는 influx 위험이 커집니다. [S1]\n"
-            "- Mud weight가 fracture pressure보다 높으면 암석이 파괴되어 drilling fluid loss 또는 lost circulation이 발생할 수 있습니다. [S1]"
+            f"- Mud weight가 fracture pressure보다 높으면 암석이 파괴되어 drilling fluid loss 또는 lost circulation이 발생할 수 있습니다. [{loss_id}]"
         )
-        self.last_debug["citation_ids_after_filtering"] = ["S1"]
+        self.last_debug["citation_ids_after_filtering"] = [f"S{index}" for index in range(1, len(sources) + 1)]
         self.last_debug["refusal_reason"] = None
-        return answer, [source]
+        return answer, sources
 
     def _query_type_instruction(self, query_type: QueryType) -> str:
         if query_type == QueryType.AGGREGATE_ANALYSIS:
@@ -625,12 +661,25 @@ class QAService:
     def _postprocess_answer(self, answer: str, question: str) -> str:
         answer = answer.replace("порosity", "porosity")
         answer = re.sub(r"[\u0400-\u04FF]+", "", answer)
+        answer = self._fix_archie_terms(answer)
         if re.search(r"archie", question, re.IGNORECASE) and self._has_wrong_archie_formula(answer):
             answer = self._replace_wrong_archie_formula(answer)
         if re.search(r"\becd\b", question, re.IGNORECASE) and "annular pressure" not in answer.lower():
             answer = self._add_ecd_pressure_loss_note(answer)
         if re.search(r"mud weight|ppg|psi/ft|sg", question, re.IGNORECASE):
             answer = self._replace_invented_mud_weight_symbols(answer)
+        return answer
+
+    def _fix_archie_terms(self, answer: str) -> str:
+        replacements = {
+            "비석회질 지층": "비셰일성 지층",
+            "비석회질": "비셰일성",
+            "비석회": "비셰일",
+            "형성물 수지 저항도": "지층수 저항도",
+            "진짜 지층 저항도": "진성 지층 저항도",
+        }
+        for old, new in replacements.items():
+            answer = answer.replace(old, new)
         return answer
 
     def _has_wrong_archie_formula(self, answer: str) -> bool:
@@ -663,11 +712,21 @@ class QAService:
             r"R_\\?\{?\\?text\{SG\}\}?": "SG",
             r"R_\{?psi/ft\}?": r"\\text{Pressure gradient (psi/ft)}",
             r"R_\{?ppg\}?": r"\\text{Mud weight (ppg)}",
+            r"\bR_t\b": r"\\text{Pressure gradient (psi/ft)}",
         }
         cleaned = answer
         for pattern, replacement in replacements.items():
             cleaned = re.sub(pattern, replacement, cleaned)
         return cleaned
+
+    def _has_invented_mud_weight_symbol(self, answer: str) -> bool:
+        return bool(
+            re.search(
+                r"\bR_t\b|R_\\?\{?(?:\\?text\{)?(?:psi/ft|psi|ppg|sg)",
+                answer,
+                re.IGNORECASE,
+            )
+        )
 
     def _add_ecd_pressure_loss_note(self, answer: str) -> str:
         if "[S1]" not in answer:

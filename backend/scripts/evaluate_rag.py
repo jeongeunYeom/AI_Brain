@@ -171,8 +171,8 @@ def judge_result(
             "mud weight conversion answer lacks required constants or units",
         )
         checks["mud_conversion_no_invented_r_symbols"] = check(
-            not re.search(r"R_\\?\{?(?:\\?text\{)?(?:psi/ft|ppg|sg)", answer, re.IGNORECASE),
-            "answer invented R_psi/R_ppg style symbols",
+            not re.search(r"\bR_t\b|R_\\?\{?(?:\\?text\{)?(?:psi/ft|psi|ppg|sg|t)", answer, re.IGNORECASE),
+            "answer invented R_t/R_psi/R_ppg style symbols",
         )
 
     if "mud weight window" in lower_question:
@@ -254,6 +254,11 @@ async def evaluate_questions(
             "context_tokens_estimate": debug.get("context_tokens_estimate"),
             "dropped_by_document_limit": debug.get("dropped_by_document_limit"),
             "dropped_by_context_limit": debug.get("dropped_by_context_limit"),
+            "exact_phrase_matches": debug.get("exact_phrase_matches"),
+            "abbreviation_matches": debug.get("abbreviation_matches"),
+            "weak_matches": debug.get("weak_matches"),
+            "excluded_false_positive_count": debug.get("excluded_false_positive_count"),
+            "excluded_false_positive_reasons": debug.get("excluded_false_positive_reasons"),
             "refusal_reason": debug.get("refusal_reason"),
             "citation_ids_before_filtering": debug.get("citation_ids_before_filtering", []),
             "citation_ids_after_filtering": debug.get("citation_ids_after_filtering", []),
@@ -317,6 +322,11 @@ def save_reports(results: list[dict[str, Any]], output_dir: Path) -> tuple[Path,
             "context_tokens_estimate",
             "dropped_by_document_limit",
             "dropped_by_context_limit",
+            "exact_phrase_matches",
+            "abbreviation_matches",
+            "weak_matches",
+            "excluded_false_positive_count",
+            "excluded_false_positive_reasons",
             "citation_ids_before_filtering",
             "citation_ids_after_filtering",
         ]:

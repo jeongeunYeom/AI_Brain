@@ -7,11 +7,13 @@ from pathlib import Path
 from PIL import Image
 
 from app.core.config import Settings
+from app.models.schemas import Source
 from app.services.document_processor import DocumentProcessor
 from app.services.qa import QAService
 from app.services.query_router import QueryType, classify_query
 from app.services.vector_store import VectorStore
 from scripts.evaluate_rag import evaluate_questions, has_valid_archie_formula, judge_result, save_reports
+from scripts.reprocess_figure_notes import matches_document, reprocess_notes
 
 
 class FakeCollection:
@@ -238,3 +240,86 @@ def test_reprocess_figure_notes_cli_entrypoints(tmp_path: Path):
         assert result.returncode == 0, result.stderr
 
     assert not list(tmp_path.rglob("*.bak.md"))
+
+
+def test_reprocess_figure_notes_skip_reasons_and_document_normalization(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path)
+    settings.figure_notes_dir.mkdir(parents=True, exist_ok=True)
+    settings.figures_dir.mkdir(parents=True, exist_ok=True)
+    note = settings.figure_notes_dir / "Heriot_Watt_University_Well_Test_Analysis.md"
+    note.write_text("legacy note", encoding="utf-8")
+    (settings.figure_notes_dir / "other.md").write_text("legacy note", encoding="utf-8")
+
+    assert matches_document(note, "", "heriot-watt university well test analysis")
+    counts = reprocess_notes(
+        settings=settings,
+        document="Heriot-Watt University - Well Test Analysis",
+        apply=False,
+        update_chroma=False,
+    )
+
+    assert counts["scanned"] == 2
+    assert counts["document_matches"] == 1
+    assert counts["skipped_missing_image"] == 1
+    assert counts["skipped_document_mismatch"] == 1
+    assert counts["processed"] == 0
+    assert counts["failed"] == 0
+
+
+def test_evaluator_rejects_rt_as_mud_weight_pressure_gradient():
+    checks = judge_result(
+        question="Mud weight를 psi/ft 또는 SG로 변환하는 관계식을 문서에서 찾아 설명해줘.",
+        answer="$$R_t = MW \\times 0.052$$",
+        sources=[{"excerpt": "conversion table"}],
+        debug={},
+        elapsed_seconds=1,
+        error=None,
+    )
+
+    assert checks["mud_conversion_no_invented_r_symbols"]["ok"] is False
+
+
+def test_mud_window_fallback_ignores_contents_and_uses_two_sources():
+    service = QAService(Settings(), object(), object())
+    sources = {
+        "S1": Source(
+            document="toc.pdf",
+            page=160,
+            chunk_id="toc",
+            excerpt="Table of Contents kick lost circulation pore pressure fracture pressure",
+        ),
+        "S2": Source(
+            document="drilling.pdf",
+            page=10,
+            chunk_id="kick",
+            excerpt="If hydrostatic pressure is below pore pressure, formation fluid can enter the wellbore as an influx or kick.",
+        ),
+        "S3": Source(
+            document="drilling.pdf",
+            page=11,
+            chunk_id="loss",
+            excerpt="If pressure exceeds the fracture pressure or fracture gradient, formation breakdown and lost circulation can occur.",
+        ),
+    }
+
+    answer, used = service._mud_window_fallback_answer(sources)
+
+    assert [source.chunk_id for source in used] == ["kick", "loss"]
+    assert "[S1]" in answer and "[S2]" in answer
+
+
+def test_mud_window_fallback_refuses_contents_only():
+    service = QAService(Settings(), object(), object())
+    answer, used = service._mud_window_fallback_answer(
+        {
+            "S1": Source(
+                document="toc.pdf",
+                page=160,
+                chunk_id="toc",
+                excerpt="Table of Contents kick lost circulation pore pressure fracture pressure",
+            )
+        }
+    )
+
+    assert used == []
+    assert "확인할 수 없습니다" in answer

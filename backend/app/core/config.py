@@ -68,6 +68,10 @@ class Settings:
         )
     )
 
+    anonymized_telemetry: bool = field(
+        default_factory=lambda: os.getenv("ANONYMIZED_TELEMETRY", "False").lower() == "true"
+    )
+
     chunk_size: int = field(
         default_factory=lambda: int(
             os.getenv("CHUNK_SIZE", "1200")

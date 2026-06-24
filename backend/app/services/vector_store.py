@@ -1,10 +1,14 @@
 import math
+import logging
 import os
 import re
 from typing import Any
 
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+
 import chromadb
 import torch
+from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 
 from app.core.config import Settings
@@ -170,8 +174,11 @@ def expand_query_terms(question: str) -> list[str]:
 class VectorStore:
     def __init__(self, settings: Settings):
         self.settings = settings
+        if not settings.anonymized_telemetry:
+            logging.getLogger("chromadb.telemetry.product.posthog").disabled = True
         self.client = chromadb.PersistentClient(
-            path=str(settings.vector_db_dir)
+            path=str(settings.vector_db_dir),
+            settings=ChromaSettings(anonymized_telemetry=settings.anonymized_telemetry),
         )
         self.collection = self.client.get_or_create_collection(
             name=settings.collection_name,
@@ -386,10 +393,18 @@ class VectorStore:
             "deduplicated_documents": 0,
             "deduplicated_pages": 0,
             "dropped_by_document_limit": 0,
+            "exact_phrase_matches": 0,
+            "abbreviation_matches": 0,
+            "weak_matches": 0,
+            "excluded_false_positive_count": 0,
+            "excluded_false_positive_reasons": {},
         }
         if not tokens:
             return []
 
+        is_bhp_query = bool(
+            re.search(r"bottom\s*-?\s*hole pressure|bottomhole pressure|\bbhp\b", question, re.IGNORECASE)
+        )
         merged: dict[tuple[str, int], dict[str, Any]] = {}
         offset = 0
 
@@ -411,7 +426,11 @@ class VectorStore:
                 self.last_aggregate_debug["total_scanned_chunks"] += 1
                 text = str(document or "")
                 meta = metadata or {}
-                score = self._keyword_score(text, tokens, meta, None)
+                score = (
+                    self._bhp_aggregate_score(text)
+                    if is_bhp_query
+                    else self._keyword_score(text, tokens, meta, None)
+                )
                 if score <= 0:
                     continue
                 self.last_aggregate_debug["keyword_matched_chunks"] += 1
@@ -488,6 +507,40 @@ class VectorStore:
             }
         )
         return results
+
+    def _bhp_aggregate_score(self, text: str) -> float:
+        lower = text.lower()
+        exact = bool(re.search(r"\bbottom\s*-?\s*hole pressure\b|\bbottomhole pressure\b", lower))
+        abbreviation = bool(re.search(r"\b(?:bhp|pwf|pws)\b", text, re.IGNORECASE))
+        weak = bool(re.search(r"\bwellbore pressure\b", lower))
+
+        if "bottomhole circulating temperature" in lower or re.search(r"\bbhct\b", text, re.IGNORECASE):
+            return self._exclude_aggregate_match("bhct_false_positive")
+        if not (exact or abbreviation):
+            if weak:
+                self.last_aggregate_debug["weak_matches"] += 1
+                return self._exclude_aggregate_match("weak_without_core_term")
+            return 0.0
+
+        if exact:
+            self.last_aggregate_debug["exact_phrase_matches"] += 1
+        if abbreviation:
+            self.last_aggregate_debug["abbreviation_matches"] += 1
+        if weak:
+            self.last_aggregate_debug["weak_matches"] += 1
+
+        score = 1.0 if exact else 0.9
+        if weak:
+            score += 0.05
+        if any(marker in lower for marker in LOW_VALUE_MARKERS):
+            score *= 0.35
+        return min(score, 1.0)
+
+    def _exclude_aggregate_match(self, reason: str) -> float:
+        self.last_aggregate_debug["excluded_false_positive_count"] += 1
+        reasons = self.last_aggregate_debug["excluded_false_positive_reasons"]
+        reasons[reason] = int(reasons.get(reason, 0)) + 1
+        return 0.0
 
     def expand_with_neighbors(
         self,
