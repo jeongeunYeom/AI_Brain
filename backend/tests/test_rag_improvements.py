@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from app.core.config import Settings
 from app.models.schemas import Source
@@ -13,7 +13,7 @@ from app.services.qa import QAService
 from app.services.query_router import QueryType, classify_query
 from app.services.vector_store import VectorStore
 from scripts.evaluate_rag import evaluate_questions, has_valid_archie_formula, judge_result, save_reports
-from scripts.reprocess_figure_notes import matches_document, reprocess_notes
+from scripts.reprocess_figure_notes import build_reprocessed_note, matches_document, reprocess_notes
 
 
 class FakeCollection:
@@ -251,11 +251,17 @@ def test_reprocess_figure_notes_skip_reasons_and_document_normalization(tmp_path
     (settings.figure_notes_dir / "other.md").write_text("legacy note", encoding="utf-8")
 
     assert matches_document(note, "", "heriot-watt university well test analysis")
-    counts = reprocess_notes(
-        settings=settings,
-        document="Heriot-Watt University - Well Test Analysis",
-        apply=False,
-        update_chroma=False,
+    counts = asyncio.run(
+        reprocess_notes(
+            settings=settings,
+            document="Heriot-Watt University - Well Test Analysis",
+            note_stem=None,
+            limit=None,
+            apply=False,
+            analyze_dry_run=False,
+            force_vision=False,
+            update_chroma=False,
+        )
     )
 
     assert counts["scanned"] == 2
@@ -264,6 +270,255 @@ def test_reprocess_figure_notes_skip_reasons_and_document_normalization(tmp_path
     assert counts["skipped_document_mismatch"] == 1
     assert counts["processed"] == 0
     assert counts["failed"] == 0
+
+
+def make_figure(path: Path) -> None:
+    image = Image.new("RGB", (500, 400), "white")
+    draw = ImageDraw.Draw(image)
+    for x in range(0, 500, 5):
+        color = (x % 255, (x * 3) % 255, (x * 7) % 255)
+        draw.line((x, 0, 499 - x % 500, 399), fill=color, width=1)
+    draw.rectangle((40, 40, 460, 350), outline="black", width=4)
+    draw.line((60, 330, 450, 80), fill="black", width=5)
+    image.save(path)
+
+
+def test_reprocess_does_not_reuse_legacy_text_and_passes_image_path(monkeypatch, tmp_path: Path):
+    settings = Settings(data_dir=tmp_path)
+    settings.figure_notes_dir.mkdir(parents=True, exist_ok=True)
+    settings.figures_dir.mkdir(parents=True, exist_ok=True)
+    stem = "doc_p104_fig1"
+    note = settings.figure_notes_dir / f"{stem}.md"
+    image = settings.figures_dir / f"{stem}.png"
+    note.write_text("x축은 시간일 수 있습니다.", encoding="utf-8")
+    make_figure(image)
+    seen: dict[str, Path] = {}
+
+    async def fake_describe(self, image_path, prompt=None):
+        seen["image_path"] = image_path
+        with Image.open(image_path) as passed_image:
+            seen["mode"] = passed_image.mode
+        return (
+            "image_type: graph\n"
+            "analysis: 새 Vision 분석\n"
+            "x_axis: Time\n"
+            "x_axis_unit: s\n"
+            "y_axis: Pressure\n"
+            "y_axis_unit: psi\n"
+            "trend: increasing\n"
+            "engineering_meaning: pressure increases with time"
+        )
+
+    monkeypatch.setattr("app.services.ollama.OllamaClient.describe_image", fake_describe)
+    counts = asyncio.run(
+        reprocess_notes(
+            settings=settings,
+            document=None,
+            note_stem=stem,
+            limit=None,
+            apply=True,
+            analyze_dry_run=False,
+            force_vision=False,
+            update_chroma=False,
+        )
+    )
+
+    updated = note.read_text(encoding="utf-8")
+    assert counts["processed"] == 1
+    assert seen["image_path"] != image
+    assert seen["image_path"].suffix == ".png"
+    assert seen["mode"] == "RGB"
+    assert not seen["image_path"].exists()
+    assert f"image_path: {image}" in updated
+    assert "새 Vision 분석" in updated
+    assert "x축은 시간일 수 있습니다" not in updated
+    assert list(settings.figure_notes_dir.glob(f"{stem}.*.bak.md"))
+    assert not settings.vector_db_dir.exists()
+
+
+def test_reprocess_vision_failure_keeps_existing_note(monkeypatch, tmp_path: Path):
+    settings = Settings(data_dir=tmp_path)
+    settings.figure_notes_dir.mkdir(parents=True, exist_ok=True)
+    settings.figures_dir.mkdir(parents=True, exist_ok=True)
+    stem = "doc_p1_fig1"
+    note = settings.figure_notes_dir / f"{stem}.md"
+    image = settings.figures_dir / f"{stem}.png"
+    note.write_text("legacy", encoding="utf-8")
+    make_figure(image)
+
+    async def fail_describe(self, image_path, prompt=None):
+        raise RuntimeError("vision down")
+
+    monkeypatch.setattr("app.services.ollama.OllamaClient.describe_image", fail_describe)
+    counts = asyncio.run(
+        reprocess_notes(
+            settings=settings,
+            document=None,
+            note_stem=stem,
+            limit=None,
+            apply=True,
+            analyze_dry_run=False,
+            force_vision=False,
+            update_chroma=False,
+        )
+    )
+
+    assert counts["failed"] == 1
+    assert note.read_text(encoding="utf-8") == "legacy"
+    assert not list(settings.figure_notes_dir.glob("*.bak.md"))
+
+
+def test_reprocess_low_confidence_keeps_existing_note(monkeypatch, tmp_path: Path):
+    settings = Settings(data_dir=tmp_path)
+    settings.figure_notes_dir.mkdir(parents=True, exist_ok=True)
+    settings.figures_dir.mkdir(parents=True, exist_ok=True)
+    stem = "doc_p1_fig2"
+    note = settings.figure_notes_dir / f"{stem}.md"
+    image = settings.figures_dir / f"{stem}.png"
+    note.write_text("legacy", encoding="utf-8")
+    make_figure(image)
+
+    async def low_confidence(self, image_path, prompt=None):
+        return "image_type: logo\nanalysis: decorative logo"
+
+    monkeypatch.setattr("app.services.ollama.OllamaClient.describe_image", low_confidence)
+    counts = asyncio.run(
+        reprocess_notes(
+            settings=settings,
+            document=None,
+            note_stem=stem,
+            limit=None,
+            apply=True,
+            analyze_dry_run=False,
+            force_vision=False,
+            update_chroma=False,
+        )
+    )
+
+    assert counts["rejected_low_confidence"] == 1
+    assert counts["skipped_low_quality"] == 0
+    assert note.read_text(encoding="utf-8") == "legacy"
+    assert not list(settings.figure_notes_dir.glob("*.bak.md"))
+
+
+def test_reprocess_force_vision_bypasses_prefilter_and_uses_temp_rgb_png(monkeypatch, tmp_path: Path):
+    settings = Settings(data_dir=tmp_path)
+    settings.figure_notes_dir.mkdir(parents=True, exist_ok=True)
+    settings.figures_dir.mkdir(parents=True, exist_ok=True)
+    stem = "doc_p261_fig2"
+    note = settings.figure_notes_dir / f"{stem}.md"
+    image = settings.figures_dir / f"{stem}.jpg"
+    note.write_text("legacy", encoding="utf-8")
+    Image.new("CMYK", (80, 80), (0, 0, 0, 255)).save(image)
+    seen: dict[str, object] = {}
+
+    async def fake_describe(self, image_path, prompt=None):
+        seen["path"] = image_path
+        with Image.open(image_path) as passed_image:
+            seen["mode"] = passed_image.mode
+            seen["format"] = passed_image.format
+        return (
+            "image_type: graph\n"
+            "analysis: pressure log-log plot\n"
+            "x_axis: elapsed time\n"
+            "x_axis_unit: hr\n"
+            "y_axis: pressure\n"
+            "y_axis_unit: psi\n"
+            "trend: curve changes across time\n"
+            "engineering_meaning: pressure behavior is visible"
+        )
+
+    monkeypatch.setattr("app.services.ollama.OllamaClient.describe_image", fake_describe)
+    counts = asyncio.run(
+        reprocess_notes(
+            settings=settings,
+            document=None,
+            note_stem=stem,
+            limit=None,
+            apply=False,
+            analyze_dry_run=True,
+            force_vision=True,
+            update_chroma=False,
+        )
+    )
+
+    assert counts["matched_notes"] == 1
+    assert counts["matched_images"] == 1
+    assert counts["would_call_vision"] == 1
+    assert counts["would_reanalyze"] == 1
+    assert counts["skipped_low_quality"] == 0
+    assert seen["path"] != image
+    assert Path(seen["path"]).suffix == ".png"
+    assert seen["mode"] == "RGB"
+    assert seen["format"] == "PNG"
+    assert not Path(seen["path"]).exists()
+    assert note.read_text(encoding="utf-8") == "legacy"
+    assert not list(settings.figure_notes_dir.glob("*.bak.md"))
+
+
+def test_uncertain_vision_fields_are_not_verified(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path)
+    note = tmp_path / "doc_p1_fig1.md"
+    image = tmp_path / "doc_p1_fig1.png"
+    make_figure(image)
+    text, _ = build_reprocessed_note(
+        settings=settings,
+        note_path=note,
+        image_path=image,
+        vision_text=(
+            "image_type: graph\n"
+            "analysis: graph\n"
+            "x_axis: 시간일 수 있습니다\n"
+            "y_axis: Pressure\n"
+            "trend: 상승 추세로 보입니다\n"
+        ),
+        candidate={"image_type": "unknown", "confidence": 0.6, "should_analyze": True},
+        backup_path=None,
+    )
+
+    assert "x_axis: 확인할 수 없음" in text
+    assert "x_axis_verified: false" in text
+    assert "trend: 확인할 수 없음" in text
+    assert "trend_verified: false" in text
+
+
+def test_reprocess_note_and_limit_select_single_item(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path)
+    settings.figure_notes_dir.mkdir(parents=True, exist_ok=True)
+    settings.figures_dir.mkdir(parents=True, exist_ok=True)
+    for index in [1, 2]:
+        stem = f"doc_p1_fig{index}"
+        (settings.figure_notes_dir / f"{stem}.md").write_text("legacy", encoding="utf-8")
+        make_figure(settings.figures_dir / f"{stem}.png")
+
+    note_counts = asyncio.run(
+        reprocess_notes(
+            settings=settings,
+            document=None,
+            note_stem="doc_p1_fig2",
+            limit=None,
+            apply=False,
+            analyze_dry_run=False,
+            force_vision=False,
+            update_chroma=False,
+        )
+    )
+    limit_counts = asyncio.run(
+        reprocess_notes(
+            settings=settings,
+            document=None,
+            note_stem=None,
+            limit=1,
+            apply=False,
+            analyze_dry_run=False,
+            force_vision=False,
+            update_chroma=False,
+        )
+    )
+
+    assert note_counts["matched_notes"] == 1
+    assert limit_counts["matched_notes"] == 1
+    assert not list(settings.figure_notes_dir.glob("*.bak.md"))
 
 
 def test_evaluator_rejects_rt_as_mud_weight_pressure_gradient():
