@@ -11,6 +11,11 @@ from app.models.schemas import (
     ModelAnswer,
     Source,
 )
+from app.services.agent_run_logger import AgentRunLogger
+from app.services.engineering_validator import (
+    EngineeringValidator,
+    ValidationResult,
+)
 from app.services.ollama import OllamaClient
 from app.services.figure_preview import FigurePreviewService
 from app.services.query_router import QueryType, classify_query
@@ -125,18 +130,66 @@ class QAService:
             data_dir / "figure_display_previews",
             data_dir / "figure_display_overrides.json",
         )
+        agent_runs_dir = Path(
+            getattr(
+                settings,
+                "agent_runs_dir",
+                data_dir / "agent_runs",
+            )
+        )
+        self.engineering_validator = EngineeringValidator()
+        self.agent_run_logger = AgentRunLogger(agent_runs_dir)
 
     async def answer(
         self,
         question: str,
         top_k: int | None = None,
         model: str | None = None,
+        benchmark_id: str | None = None,
     ) -> ChatResponse:
         selected_model = model or self.settings.text_model
+        run_started = time.perf_counter()
+        task_id = self.agent_run_logger.new_task_id("WT")
         prepared = self._prepare_generation(question, top_k)
 
         aggregate = prepared.get("aggregate")
         if aggregate is not None:
+            self._save_agent_run(
+                {
+                    "task_id": task_id,
+                    "benchmark_id": benchmark_id,
+                    "question": question,
+                    "model": selected_model,
+                    "prompt_version": "welltest-validator-v1",
+                    "query_type": aggregate.query_type,
+                    "retrieval_elapsed_seconds": prepared[
+                        "retrieval_elapsed_seconds"
+                    ],
+                    "retrieved_sources": [
+                        self._source_to_dict(source)
+                        for source in aggregate.sources
+                    ],
+                    "attempts": [
+                        {
+                            "attempt": 1,
+                            "answer": aggregate.answer,
+                            "elapsed_seconds": 0.0,
+                            "validation_passed": None,
+                            "errors": [],
+                            "warnings": [
+                                "Aggregate response was not rewritten."
+                            ],
+                            "rule_ids": [],
+                        }
+                    ],
+                    "initial_passed": None,
+                    "final_passed": None,
+                    "final_status": "completed_unvalidated",
+                    "total_elapsed_seconds": (
+                        time.perf_counter() - run_started
+                    ),
+                }
+            )
             return ChatResponse(
                 answer=aggregate.answer,
                 sources=aggregate.sources,
@@ -147,6 +200,42 @@ class QAService:
             )
 
         if not prepared["hits"]:
+            validation = (
+                self.engineering_validator
+                .validate_well_test_answer(
+                    question,
+                    STRICT_REFUSAL,
+                    retrieved_sources=[],
+                )
+            )
+            self._save_agent_run(
+                {
+                    "task_id": task_id,
+                    "benchmark_id": benchmark_id,
+                    "question": question,
+                    "model": selected_model,
+                    "prompt_version": "welltest-validator-v1",
+                    "query_type": prepared["query_type"].value,
+                    "retrieval_elapsed_seconds": prepared[
+                        "retrieval_elapsed_seconds"
+                    ],
+                    "retrieved_sources": [],
+                    "attempts": [
+                        self._attempt_record(
+                            1,
+                            STRICT_REFUSAL,
+                            0.0,
+                            validation,
+                        )
+                    ],
+                    "initial_passed": validation.passed,
+                    "final_passed": validation.passed,
+                    "final_status": "completed",
+                    "total_elapsed_seconds": (
+                        time.perf_counter() - run_started
+                    ),
+                }
+            )
             return ChatResponse(
                 answer=STRICT_REFUSAL,
                 sources=[],
@@ -156,20 +245,48 @@ class QAService:
                 elapsed_seconds=0.0,
             )
 
-        started = time.perf_counter()
-        answer = await self.ollama.chat(
-            prepared["messages"],
-            model=selected_model,
+        source_payloads = [
+            self._source_to_dict(source)
+            for source in prepared["sources"]
+        ]
+        (
+            answer,
+            attempts,
+            validation,
+            final_status,
+            generation_elapsed,
+        ) = await self._generate_validated_answer(
+            question=question,
+            prepared=prepared,
+            selected_model=selected_model,
+            retrieved_sources=source_payloads,
         )
-        elapsed = time.perf_counter() - started
 
-        if str(answer or "").strip().startswith(STRICT_REFUSAL):
-            partial_answer = self._supported_partial_answer(
-                question,
-                prepared["hits"],
-            )
-            if partial_answer:
-                answer = partial_answer
+        self._save_agent_run(
+            {
+                "task_id": task_id,
+                "benchmark_id": benchmark_id,
+                "question": question,
+                "model": selected_model,
+                "prompt_version": "welltest-validator-v1",
+                "query_type": prepared["query_type"].value,
+                "retrieval_elapsed_seconds": prepared[
+                    "retrieval_elapsed_seconds"
+                ],
+                "retrieved_sources": source_payloads,
+                "attempts": attempts,
+                "initial_passed": (
+                    attempts[0]["validation_passed"]
+                    if attempts
+                    else None
+                ),
+                "final_passed": validation.passed,
+                "final_status": final_status,
+                "total_elapsed_seconds": (
+                    time.perf_counter() - run_started
+                ),
+            }
+        )
 
         return ChatResponse(
             answer=answer,
@@ -177,8 +294,218 @@ class QAService:
             query_type=prepared["query_type"].value,
             figures=prepared["figures"],
             model=selected_model,
-            elapsed_seconds=elapsed,
+            elapsed_seconds=generation_elapsed,
         )
+
+    async def _generate_validated_answer(
+        self,
+        *,
+        question: str,
+        prepared: dict,
+        selected_model: str,
+        retrieved_sources: list[dict],
+    ) -> tuple[
+        str,
+        list[dict],
+        ValidationResult,
+        str,
+        float,
+    ]:
+        messages = list(prepared["messages"])
+        attempts: list[dict] = []
+        validation = ValidationResult(
+            passed=False,
+            errors=["답변이 생성되지 않았습니다."],
+        )
+        answer = ""
+        total_generation_elapsed = 0.0
+
+        for attempt_number in range(1, 4):
+            started = time.perf_counter()
+            answer = await self.ollama.chat(
+                messages,
+                model=selected_model,
+            )
+            elapsed = time.perf_counter() - started
+            total_generation_elapsed += elapsed
+
+            if str(answer or "").strip().startswith(
+                STRICT_REFUSAL
+            ):
+                partial_answer = self._supported_partial_answer(
+                    question,
+                    prepared["hits"],
+                )
+                if partial_answer:
+                    answer = partial_answer
+
+            validation = (
+                self.engineering_validator
+                .validate_well_test_answer(
+                    question,
+                    str(answer or ""),
+                    retrieved_sources=retrieved_sources,
+                )
+            )
+            attempts.append(
+                self._attempt_record(
+                    attempt_number,
+                    str(answer or ""),
+                    elapsed,
+                    validation,
+                )
+            )
+
+            if validation.passed:
+                return (
+                    str(answer or ""),
+                    attempts,
+                    validation,
+                    "completed",
+                    total_generation_elapsed,
+                )
+
+            if attempt_number < 3:
+                messages = self._build_rewrite_messages(
+                    question=question,
+                    previous_answer=str(answer or ""),
+                    validation=validation,
+                    original_messages=prepared["messages"],
+                )
+
+        safe_answer = (
+            "자동 공학 검증을 통과하지 못했습니다. "
+            "검색된 문서 근거는 확보했지만 답변 내용은 "
+            "사람의 검토가 필요합니다."
+        )
+        return (
+            safe_answer,
+            attempts,
+            validation,
+            "review_required",
+            total_generation_elapsed,
+        )
+
+    def _build_rewrite_messages(
+        self,
+        *,
+        question: str,
+        previous_answer: str,
+        validation: ValidationResult,
+        original_messages: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        del previous_answer
+        error_lines = "\n".join(
+            f"- {message}"
+            for message in validation.errors
+        )
+        original_user_prompt = str(
+            original_messages[-1].get("content", "")
+        )
+        normalized_question = re.sub(
+            r"\s+",
+            " ",
+            question.lower(),
+        )
+        reviews_false_claim = bool(
+            re.search(
+                r"radial\s*flow|방사\s*유동",
+                normalized_question,
+                re.IGNORECASE,
+            )
+            and re.search(
+                r"unit[- ]?slope|단위\s*기울기",
+                normalized_question,
+                re.IGNORECASE,
+            )
+            and re.search(
+                r"맞는지|검토|틀린|수정|correct|review",
+                normalized_question,
+                re.IGNORECASE,
+            )
+        )
+        opening_rule = (
+            "첫 문장을 반드시 '해당 설명은 틀렸습니다.'로 "
+            "시작하세요.\n"
+            if reviews_false_claim
+            else ""
+        )
+
+        rewrite_prompt = (
+            "이전 답변은 수정하거나 요약하지 말고 완전히 "
+            "폐기한 뒤 처음부터 다시 작성하세요.\n\n"
+            "검증 오류:\n"
+            f"{error_lines}\n\n"
+            f"{opening_rule}"
+            "반드시 지킬 정답 기준:\n"
+            "1. Early-time wellbore storage에서는 pressure와 "
+            "pressure derivative가 서로 겹쳐 unit-slope "
+            "diagonal을 따릅니다.\n"
+            "2. Middle-time radial flow에서는 pressure "
+            "derivative가 일정해져 수평 plateau를 "
+            "형성합니다.\n"
+            "3. Radial flow에서 pressure가 unit-slope를 "
+            "따른다고 쓰지 마세요.\n"
+            "4. Radial flow에서 pressure derivative가 "
+            "unit-slope를 따른다고 쓰지 마세요.\n"
+            "5. unit-slope와 constant 또는 plateau를 같은 "
+            "곡선의 동시 특성으로 결합하지 마세요.\n"
+            "6. '부분적으로 정확하다'고 표현하지 말고, "
+            "틀린 전제는 명확히 틀렸다고 판정하세요.\n"
+            "7. 서로 다른 Figure의 설명을 혼합하지 말고, "
+            "검색 근거에 없는 사실을 추가하지 마세요.\n"
+            "8. 문서명과 페이지를 인용하세요.\n\n"
+            "출력 형식:\n"
+            "- 판정 1문장\n"
+            "- Wellbore storage 특징 1문장\n"
+            "- Radial flow 특징 1문장\n"
+            "- 올바르게 수정한 문장 1문장\n\n"
+            f"원래 질문:\n{question}\n\n"
+            "동일하게 재사용할 검색 근거와 지시:\n"
+            f"{original_user_prompt}"
+        )
+        return [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": rewrite_prompt,
+            },
+        ]
+
+    @staticmethod
+    def _attempt_record(
+        attempt_number: int,
+        answer: str,
+        elapsed_seconds: float,
+        validation: ValidationResult,
+    ) -> dict:
+        return {
+            "attempt": attempt_number,
+            "answer": answer,
+            "elapsed_seconds": elapsed_seconds,
+            "validation_passed": validation.passed,
+            "errors": list(validation.errors),
+            "warnings": list(validation.warnings),
+            "rule_ids": list(validation.rule_ids),
+        }
+
+    @staticmethod
+    def _source_to_dict(source: Source) -> dict:
+        if hasattr(source, "model_dump"):
+            return source.model_dump()
+        return source.dict()
+
+    def _save_agent_run(self, record: dict) -> None:
+        try:
+            self.agent_run_logger.write(record)
+        except OSError as exc:
+            print(
+                "[Agent run log failed] "
+                f"{type(exc).__name__}: {exc}"
+            )
 
     async def compare(
         self,
