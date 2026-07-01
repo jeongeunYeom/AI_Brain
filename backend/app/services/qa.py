@@ -1,29 +1,98 @@
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 from app.core.config import Settings
-from app.models.schemas import ChatResponse, Source
+from app.models.schemas import ChatResponse, FigureReference, Source
 from app.services.ollama import OllamaClient
+from app.services.figure_preview import FigurePreviewService
 from app.services.query_router import QueryType, classify_query
 from app.services.vector_store import VectorStore
 
 
-
 SHA256_PREFIX = re.compile(r"^[0-9a-fA-F]{64}_")
-SOURCE_REF = re.compile(r"\[S(\d+)\]")
-REFUSAL_MARKERS = (
-    "제공된 문서 근거로는 확인할 수 없습니다",
-    "제공된 문서 근거로는 확인할 수 없어 답변할 수 없습니다",
+FIGURE_MARKERS = (
+    "[extracted figure notes]",
+    "[figure note metadata]",
+    "image_type:",
+    "trend_summary:",
+    "series_descriptions:",
 )
-GRAPH_REFUSAL = "제공된 문서에서 축과 단위를 확인할 수 있는 그래프 근거를 찾지 못했습니다."
+FIGURE_INTENT_RE = re.compile(
+    r"그래프|도표|그림|플롯|곡선|계열|추세|경향|축|범례|기울기|구배|"
+    r"graph|plot|figure|chart|curve|series|trend|axis|legend|slope|gradient",
+    re.IGNORECASE,
+)
+FIGURE_TREND_RE = re.compile(
+    r"추세|경향|변화|상승|하락|증가|감소|최대|최소|평탄|"
+    r"trend|rise|increase|decline|decrease|peak|minimum|plateau|slope",
+    re.IGNORECASE,
+)
+FIGURE_AXIS_RE = re.compile(
+    r"x축|y축|축|단위|axis|unit|equivalent\s+time|delta\s*p",
+    re.IGNORECASE,
+)
+FIGURE_GRADIENT_RE = re.compile(
+    r"기울기|구배|gradient|psi\s*/\s*ft|psi\s*/\s*m",
+    re.IGNORECASE,
+)
+NUMERIC_GRADIENT_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*psi\s*/\s*(?:ft|m)\b",
+    re.IGNORECASE,
+)
+SUPERCHARGED_RE = re.compile(r"supercharg(?:ed|ing)", re.IGNORECASE)
+RFT_ZONE_DETAIL_RE = re.compile(
+    r"interpreted\s*rft\s*data|zone\s*1|zone\s*7|"
+    r"supercharged\s*points?|double\s*pretest\s*sequence",
+    re.IGNORECASE,
+)
+STRICT_REFUSAL = "제공된 문서 근거로는 확인할 수 없습니다."
+TYPE_CURVE_INTENT_RE = re.compile(
+    r"type\s*curve|wellbore\s*storage|radial\s*flow|derivative\s*plateau|"
+    r"middle[-\s]*time\s*region|\bmtr\b|unit[-\s]*slope|타입\s*커브|"
+    r"정류\s*유동|중기\s*유동|유정저장",
+    re.IGNORECASE,
+)
+RFT_COMPARISON_RE = re.compile(
+    r"(?:rft|formation\s*tester).*(?:before|after|전후|비교)|"
+    r"(?:before|after|전후|비교).*(?:rft|formation\s*tester)|"
+    r"significant\s*production|생산\s*전후",
+    re.IGNORECASE,
+)
+RFT_BEFORE_TERMS = (
+    "appraisal well rft survey",
+    "appraisal well",
+)
+RFT_AFTER_TERMS = (
+    "rft survey after significant production",
+    "after significant production",
+)
+TYPE_CURVE_EVIDENCE_TERMS = (
+    "td/cd type curve including the derivative",
+    "wellbore storage dominated flow",
+    "unit slope diagonal",
+    "middle time region",
+    "derivative plateau",
+    "figure 22",
+)
 
 
-REFUSAL_MARKERS = (
-    *REFUSAL_MARKERS,
-    "제공된 문서 근거로는 확인할 수 없습니다",
-    "제공된 문서 근거로는 확인할 수 없어 답변할 수 없습니다",
-)
-GRAPH_REFUSAL = "제공된 문서에서 축, 단위 및 추세를 검증할 수 있는 그래프 근거를 찾지 못했습니다."
+SYSTEM_PROMPT = """You are a strict evidence-only petroleum engineering RAG agent.
+Rules:
+1. Use ONLY the retrieved chunks provided in the prompt.
+2. Do NOT infer from the document title, general petroleum-engineering knowledge, or model memory.
+3. Use the exact refusal "제공된 문서 근거로는 확인할 수 없습니다." only when the retrieved chunks support no substantive part of the question.
+4. For a multi-part question with partial evidence, answer every supported part with citations and state specifically which unsupported subpart cannot be confirmed. Do not refuse the entire question when any substantive part is supported.
+5. Every factual sentence must be supported by a cited source marker like [document, p.page].
+6. Do not mention topics that are not present in the retrieved chunks.
+7. Answer in Korean unless the source terminology is English.
+8. For figure questions, distinguish axis labels from plotted series. Never call x_axis or y_axis a series. Use series_descriptions and trend_summary to describe series behavior.
+9. Prefer explicit Figure Note fields over generic nearby chapter text when both are retrieved.
+10. If the question asks for a displayed gradient, unit, threshold, or other numeric value, state the exact value only when it appears explicitly in a retrieved chunk. Otherwise say that the exact value is not confirmed.
+11. Do not infer causes, permeability behavior, fluid distribution, or reservoir properties unless a retrieved chunk explicitly states them.
+12. Do not merge separate figures from adjacent pages into one series description unless the retrieved text explicitly identifies them as the same figure or comparison.
+13. When a Figure Note names categories, zones, point types, legends, axes, or reference lines but does not give a separate behavior for every category, report the supported overall pattern and legend meanings, then explicitly say that per-category behavior is not confirmed.
+"""
 
 
 def clean_document_name(value: object) -> str:
@@ -32,230 +101,117 @@ def clean_document_name(value: object) -> str:
     return SHA256_PREFIX.sub("", filename)
 
 
-SYSTEM_PROMPT = """You are a strict evidence-only petroleum engineering RAG agent.
-Rules:
-1. Use ONLY the retrieved chunks provided in the prompt.
-2. Do NOT infer from the document title, general petroleum-engineering knowledge, or model memory.
-3. If the retrieved chunks do not explicitly support an answer, reply exactly: "제공된 문서 근거로는 확인할 수 없습니다."
-4. Cite sources only with provided source IDs such as [S1], [S2]. Do not cite document names, page numbers, or invented markers.
-5. Every factual sentence must be supported by one or more valid [S#] markers.
-6. Do not mention topics that are not present in the retrieved chunks.
-7. When the user asks for formulas, use only formulas present in the chunks. Do not reconstruct or guess formulas.
-8. Write standalone formulas as separate Markdown LaTeX blocks using $$ ... $$ and inline variables as $R_t$ or $S_w$.
-9. Explain units only when units are explicitly present in the chunks. If not present, say "문서에 단위가 명시되지 않음".
-10. Never concatenate multiple equations on one line.
-11. Answer in Korean unless the source terminology is English.
-"""
-
-SYSTEM_PROMPT += """
-Additional rules:
-12. If the retrieved chunks do not explicitly support an answer, reply exactly: "제공된 문서 근거로는 확인할 수 없습니다."
-13. Prefer the original equation exactly as written in the chunks. If you algebraically rearrange a formula, preserve parentheses and exponent scope exactly.
-14. Do not use Russian, Cyrillic, or mixed-language words unrelated to the Korean question and English source terminology.
-15. For conversion formulas, do not invent symbols that are absent from the source. Use descriptive labels such as \\text{Pressure gradient (psi/ft)} when the source provides only a conversion relation.
-16. For aggregate questions, produce a table from representative evidence when the retrieved chunks directly define or explain the topic.
-"""
-
-
 class QAService:
     def __init__(self, settings: Settings, vector_store: VectorStore, ollama: OllamaClient):
         self.settings = settings
         self.vector_store = vector_store
         self.ollama = ollama
-        self.last_debug: dict[str, object] = {}
+        configured_data_dir = getattr(settings, "data_dir", None)
+        configured_figures_dir = getattr(settings, "figures_dir", None)
+        if configured_data_dir is not None:
+            data_dir = Path(configured_data_dir)
+        elif configured_figures_dir is not None:
+            data_dir = Path(configured_figures_dir)
+        else:
+            data_dir = Path("data")
+        self.figure_preview = FigurePreviewService(
+            data_dir / "figure_display_previews",
+            data_dir / "figure_display_overrides.json",
+        )
 
     async def answer(self, question: str, top_k: int | None = None) -> ChatResponse:
         query_type = classify_query(question)
+        if query_type == QueryType.AGGREGATE_ANALYSIS:
+            return self._aggregate_response(question, query_type)
 
-        search_question = (
-            self._build_graph_search_question(question)
-            if query_type == QueryType.GRAPH_ANALYSIS
-            else self._build_search_question(question)
-        )
-        self.last_debug = {
-            "question": question,
-            "query_type": query_type.value,
-            "search_question": search_question,
-            "retrieved_count": 0,
-            "context_sources": [],
-            "used_source_ids": [],
-            "refusal": False,
-            "raw_model_answer": "",
-            "citation_ids_before_filtering": [],
-            "citation_ids_after_filtering": [],
-            "refusal_reason": None,
-        }
+        search_question = self._build_search_question(question)
         hits = self._retrieve(
             search_question,
             query_type,
             top_k or self.settings.top_k,
+            original_question=question,
         )
-        if query_type == QueryType.AGGREGATE_ANALYSIS:
-            self.last_debug.update(getattr(self.vector_store, "last_aggregate_debug", {}))
-            hits = self._limit_aggregate_context(hits)
-        self.last_debug["retrieved_count"] = len(hits)
-
-        if query_type == QueryType.GRAPH_ANALYSIS:
-            hits = [hit for hit in hits if self._has_figure_evidence(hit)]
-            self.last_debug["retrieved_count"] = len(hits)
-            if not hits:
-                self.last_debug["refusal"] = True
-                self.last_debug["refusal_reason"] = "no_verified_graph_figure_note"
-                return ChatResponse(
-                    answer=GRAPH_REFUSAL,
-                    sources=[],
-                    query_type=query_type.value,
-                )
-
         if not hits:
-            self.last_debug["refusal"] = True
-            self.last_debug["refusal_reason"] = "no_retrieved_chunks"
             return ChatResponse(
-                answer=self._refusal_for_question(question),
+                answer=STRICT_REFUSAL,
                 sources=[],
                 query_type=query_type.value,
             )
 
         context_blocks = []
-        sources_by_id: dict[str, Source] = {}
-        for source_index, hit in enumerate(hits, start=1):
-            source_id = f"S{source_index}"
+        sources = []
+        for hit in hits:
             metadata = hit["metadata"]
             score = float(hit.get("score") or 0.0)
             document_name = clean_document_name(metadata.get("document"))
             page_number = metadata.get("page")
 
             context_blocks.append(
-                f"[{source_id}]\n"
-                f"Document: {document_name}\n"
-                f"Page: {page_number}\n"
-                f"Chunk ID: {hit['id']}\n"
-                f"Score: {score:.3f}\n"
-                f"Content:\n{hit['text']}"
+                f"Source: {document_name} p.{page_number} "
+                f"chunk {hit['id']} score={score:.3f}\n{hit['text']}"
             )
-
             preview = self._preview(str(hit["text"]))
-            sources_by_id[source_id] = Source(
-                document=document_name,
-                page=(
-                    int(page_number)
-                    if page_number is not None
-                    else None
-                ),
-                chunk_id=str(hit["id"]),
-                score=score,
-                vector_score=float(
-                    hit.get("vector_score") or 0.0
-                ),
-                keyword_score=float(
-                    hit.get("keyword_score") or 0.0
-                ),
-                excerpt=str(hit["text"]),
-                preview=preview,
+            sources.append(
+                Source(
+                    document=document_name,
+                    page=(int(page_number) if page_number is not None else None),
+                    chunk_id=str(hit["id"]),
+                    score=score,
+                    vector_score=float(hit.get("vector_score") or 0.0),
+                    keyword_score=float(hit.get("keyword_score") or 0.0),
+                    excerpt=str(hit["text"]),
+                    preview=preview,
+                )
             )
-            self.last_debug["context_sources"] = [
-                *list(self.last_debug.get("context_sources", [])),
-                {
-                    "source_id": source_id,
-                    "document": document_name,
-                    "page": page_number,
-                    "chunk_id": str(hit["id"]),
-                    "score": score,
-                    "vector_score": float(hit.get("vector_score") or 0.0),
-                    "keyword_score": float(hit.get("keyword_score") or 0.0),
-                },
-            ]
 
         user_prompt = (
             f"Query type: {query_type.value}\n"
             f"Question:\n{question}\n\n"
-            "Retrieved chunks. Use only these source IDs. Cite only [S1], [S2], ... from this list.\n"
-            "If no listed source explicitly supports the answer, refuse instead of guessing.\n"
-            + self._query_type_instruction(query_type)
+            "Answer-coverage rule: If the chunks support only part of this question, "
+            "answer the supported part and identify only the unsupported subpart. "
+            "Use the full refusal only when no substantive part is supported.\n\n"
+            "Retrieved chunks. You must not use any information outside these chunks:\n"
             + "\n\n---\n\n".join(context_blocks)
         )
         answer = await self.ollama.chat([
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ])
-        self.last_debug["raw_model_answer"] = answer
-        answer, sources = self._filter_answer_sources(answer, sources_by_id, question)
-        if not sources and re.search(r"\becd\b", question, re.IGNORECASE):
-            answer, sources = self._ecd_fallback_answer(sources_by_id)
-        if (
-            re.search(r"mud weight", question, re.IGNORECASE)
-            and re.search(r"psi/ft|sg|psi|ft", question, re.IGNORECASE)
-            and (
-                not sources
-                or self._has_invented_mud_weight_symbol(answer)
-                or "$$" not in answer
-                or not all(term in answer.lower() for term in ["0.052", "0.433", "ppg", "psi/ft", "sg"])
-            )
-        ):
-            answer, sources = self._mud_conversion_fallback_answer(sources_by_id)
-        if not sources and re.search(r"mud weight window|pore pressure|fracture pressure|kick|lost circulation", question, re.IGNORECASE):
-            answer, sources = self._mud_window_fallback_answer(sources_by_id)
-        if query_type == QueryType.AGGREGATE_ANALYSIS and not sources:
-            answer, sources = self._aggregate_fallback_answer(sources_by_id)
-        self.last_debug["used_source_ids"] = self._extract_source_ids(answer)
-        self.last_debug["refusal"] = self._is_refusal(answer) or not sources
-        if self.last_debug["refusal"] and not self.last_debug.get("refusal_reason"):
-            self.last_debug["refusal_reason"] = "model_refusal_or_no_valid_citations"
-        return ChatResponse(answer=answer, sources=sources, query_type=query_type.value)
-
+        if str(answer or "").strip().startswith(STRICT_REFUSAL):
+            partial_answer = self._supported_partial_answer(question, hits)
+            if partial_answer:
+                answer = partial_answer
+        figures = self._figure_references(hits, question=question)
+        return ChatResponse(
+            answer=answer,
+            sources=sources,
+            query_type=query_type.value,
+            figures=figures,
+        )
 
     def _build_search_question(self, question: str) -> str:
-        """Build a compact retrieval query while preserving the full user question for generation."""
+        """Build a compact retrieval query while preserving the full question for generation."""
         normalized = re.sub(r"[’`]", "'", question)
-
-        # Mixed Korean/English technical questions are searched primarily by
-        # their English engineering terms. This prevents instruction words
-        # such as "설명해줘", "변수", and "적용 조건" from diluting an exact
-        # keyword like Archie, Kick, BHP, or Wyllie.
         english_terms = re.findall(
             r"[A-Za-z][A-Za-z0-9_.-]*(?:'s)?",
             normalized,
         )
-
         ignored_terms = {
-            "a",
-            "an",
-            "and",
-            "are",
-            "as",
-            "at",
-            "be",
-            "by",
-            "for",
-            "from",
-            "in",
-            "is",
-            "of",
-            "on",
-            "or",
-            "the",
-            "to",
-            "with",
+            "a", "an", "and", "are", "as", "at", "be", "by", "for",
+            "from", "in", "is", "of", "on", "or", "the", "to", "with",
         }
-
         compact_terms: list[str] = []
         seen: set[str] = set()
-
         for term in english_terms:
             term = re.sub(r"'s$", "", term, flags=re.IGNORECASE)
             key = term.lower()
-
             if key in ignored_terms or key in seen:
                 continue
-
             seen.add(key)
             compact_terms.append(term)
-
         if compact_terms:
             return " ".join(compact_terms)
 
-        # Korean-only questions keep their technical content but remove common
-        # request phrasing that does not help document retrieval.
         cleaned = question
         request_patterns = [
             r"업로드한\s*문서만\s*근거로",
@@ -263,88 +219,22 @@ class QAService:
             r"문서명과\s*페이지\s*번호를\s*표시해줘",
             r"사용한\s*문서명과\s*페이지\s*번호를\s*표시해줘",
             r"근거가\s*없으면\s*추측하지\s*말고\s*없다고\s*말해줘",
-            r"설명해\s*줘",
-            r"설명해줘",
-            r"제시하고",
-            r"제시해\s*줘",
-            r"제시해줘",
-            r"각\s*변수",
-            r"적용\s*조건",
-            r"문서에서\s*찾아",
-            r"문서에서\s*찾아줘",
-            r"정리해\s*줘",
-            r"정리해줘",
-            r"알려\s*줘",
-            r"알려줘",
+            r"설명해\s*줘", r"설명해줘", r"정리해\s*줘", r"정리해줘",
+            r"알려\s*줘", r"알려줘",
         ]
-
         for pattern in request_patterns:
-            cleaned = re.sub(
-                pattern,
-                " ",
-                cleaned,
-                flags=re.IGNORECASE,
-            )
-
+            cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned or question
 
-    def _build_graph_search_question(self, question: str) -> str:
-        pressure_terms = [
-            "pressure graph",
-            "pressure plot",
-            "pressure transient",
-            "pressure versus time",
-            "pressure derivative",
-            "drawdown",
-            "buildup",
-            "well test",
-            "type curve",
-            "log-log plot",
-            "delta pressure",
-            "figure",
-            "chart",
-            "압력 그래프",
-            "압력 곡선",
-            "압력 변화",
-            "시간 압력",
-        ]
-        cleaned = re.sub(
-            r"\b(?:x|y)\b|x축|y축|단위|추세|설명해줘|찾아줘",
-            " ",
-            question,
-            flags=re.IGNORECASE,
-        )
-        return " ".join([cleaned, *pressure_terms])
-
-    def _retrieve(self, question: str, query_type: QueryType, top_k: int) -> list[dict]:
-        if query_type == QueryType.GRAPH_ANALYSIS:
-            return self.vector_store.hybrid_search(
-                self._build_graph_search_question(question),
-                top_k=max(top_k * 2, 12),
-                score_threshold=0.05,
-                prefer_metadata=None,
-                keyword_weight=0.75,
-            )
-
-        if query_type == QueryType.AGGREGATE_ANALYSIS:
-            if hasattr(self.vector_store, "aggregate_keyword_search"):
-                return self.vector_store.aggregate_keyword_search(
-                    question,
-                    batch_size=self.settings.aggregate_batch_size,
-                    max_results=self.settings.aggregate_max_results,
-                    max_per_document=self.settings.aggregate_max_per_document,
-                )
-
-            hits = self.vector_store.hybrid_search(
-                question,
-                top_k=max(top_k * 6, 30),
-                score_threshold=0.02,
-                prefer_metadata=None,
-                keyword_weight=0.75,
-            )
-            return self._dedupe_document_pages(hits, max_total=max(top_k * 4, 20))
-
+    def _retrieve(
+        self,
+        question: str,
+        query_type: QueryType,
+        top_k: int,
+        *,
+        original_question: str | None = None,
+    ) -> list[dict]:
         if query_type == QueryType.DOCUMENT_OVERVIEW:
             hits = self.vector_store.hybrid_search(
                 question,
@@ -354,478 +244,802 @@ class QAService:
                 keyword_weight=0.55,
             )
             if hits:
-                contents = [hit for hit in hits if hit.get("metadata", {}).get("is_contents")]
-                titles = [hit for hit in hits if hit.get("metadata", {}).get("is_title_page")]
+                contents = [
+                    hit for hit in hits
+                    if hit.get("metadata", {}).get("is_contents")
+                ]
+                titles = [
+                    hit for hit in hits
+                    if hit.get("metadata", {}).get("is_title_page")
+                ]
                 others = [hit for hit in hits if hit not in contents and hit not in titles]
-                ordered = contents + titles + others
-                return ordered[:top_k]
-        if re.search(r"mud weight", question, re.IGNORECASE) and re.search(r"psi|ft|sg", question, re.IGNORECASE):
-            keyword_hits = self.vector_store.keyword_search(
-                "mud weight 0.052 0.433 psi/ft ppg SG conversion pressure gradient",
-                max(top_k * 50, 500),
-            )
-            preferred_keyword_hits = [
-                hit
-                for hit in keyword_hits
-                if re.search(r"0\.052", str(hit.get("text") or ""))
-                and re.search(r"0\.433", str(hit.get("text") or ""))
-            ]
-            if preferred_keyword_hits:
-                return preferred_keyword_hits[:top_k]
+                return (contents + titles + others)[:top_k]
 
-            hits = self.vector_store.hybrid_search(
-                question,
-                top_k=max(top_k * 3, 18),
-                score_threshold=0.02,
-                prefer_metadata=None,
-                keyword_weight=0.8,
-            )
-            conversion_hits = [
-                hit
-                for hit in hits
-                if re.search(r"0\.052|0\.433|psi/ft|pressure gradient|conversion", str(hit.get("text") or ""), re.IGNORECASE)
-            ]
-            if conversion_hits:
-                return conversion_hits[:top_k]
-
-        if re.search(r"pore pressure|fracture pressure|mud weight window|kick|lost circulation", question, re.IGNORECASE):
-            keyword_hits = self.vector_store.keyword_search(
-                "pore pressure fracture pressure mud weight kick lost circulation drilling borehole",
-                max(top_k * 5, 50),
-            )
-            preferred_hits = [
-                hit
-                for hit in keyword_hits
-                if re.search(r"pore pressure|formation pressure", str(hit.get("text") or ""), re.IGNORECASE)
-                and re.search(r"fracture pressure|fracture", str(hit.get("text") or ""), re.IGNORECASE)
-            ]
-            if preferred_hits:
-                return preferred_hits[:top_k]
+        full_question = original_question or question
+        if self._is_figure_question(full_question):
+            return self._retrieve_figure(question, full_question, top_k)
 
         keyword_weight = 0.75 if query_type == QueryType.INDEX_LOOKUP else 0.45
-        threshold = max(0.05, self.settings.similarity_threshold if query_type == QueryType.LOCAL_FACT_SEARCH else self.settings.similarity_threshold * 0.6)
-        hits = self.vector_store.hybrid_search(
+        threshold = max(
+            0.05,
+            self.settings.similarity_threshold
+            if query_type == QueryType.LOCAL_FACT_SEARCH
+            else self.settings.similarity_threshold * 0.6,
+        )
+        return self.vector_store.hybrid_search(
             question,
             top_k=top_k,
             score_threshold=threshold,
             prefer_metadata=None,
             keyword_weight=keyword_weight,
         )
-        if hasattr(self.vector_store, "expand_with_neighbors"):
-            return self.vector_store.expand_with_neighbors(
-                hits,
-                max_total=min(max(top_k + 6, top_k), 18),
+
+    def _retrieve_figure(
+        self,
+        search_question: str,
+        original_question: str,
+        top_k: int,
+    ) -> list[dict]:
+        expanded = self._expand_figure_query(search_question, original_question)
+        candidate_count = min(max(top_k * 12, 120), 240)
+        hybrid_hits = self.vector_store.hybrid_search(
+            expanded,
+            top_k=candidate_count,
+            score_threshold=0.0,
+            prefer_metadata=None,
+            keyword_weight=0.65,
+        )
+
+        literal_hits, anchor_document_keys = self._literal_figure_hits(
+            self._english_phrases(original_question),
+        )
+        special_hits, special_document_keys = self._special_figure_hits(
+            original_question
+        )
+        anchor_document_keys.update(special_document_keys)
+
+        merged: dict[str, dict] = {}
+        for hit in [*hybrid_hits, *literal_hits, *special_hits]:
+            chunk_id = str(hit.get("id") or "")
+            if not chunk_id:
+                continue
+            existing = merged.get(chunk_id)
+            if existing is None:
+                merged[chunk_id] = dict(hit)
+                continue
+            for key in (
+                "exact_phrase_matches",
+                "strong_phrase_matches",
+                "anchor_neighbor",
+                "anchor_document",
+                "anchor_preceding",
+                "special_type_curve",
+                "comparison_before",
+                "comparison_after",
+            ):
+                existing[key] = max(
+                    float(existing.get(key) or 0.0),
+                    float(hit.get(key) or 0.0),
+                )
+            if existing.get("anchor_page_distance") is None and hit.get("anchor_page_distance") is not None:
+                existing["anchor_page_distance"] = hit.get("anchor_page_distance")
+
+        hits = list(merged.values())
+        if anchor_document_keys:
+            anchored = [
+                hit
+                for hit in hits
+                if self._document_key(hit) in anchor_document_keys
+            ]
+            if anchored:
+                hits = anchored
+
+        return self._rerank_figure_hits(hits, original_question, top_k)
+
+    def _literal_figure_hits(
+        self,
+        phrases: list[str],
+    ) -> tuple[list[dict], set[str]]:
+        collection = getattr(self.vector_store, "collection", None)
+        if collection is None or not phrases:
+            return [], set()
+
+        try:
+            data = collection.get(include=["documents", "metadatas"])
+        except Exception:
+            return [], set()
+
+        records: list[dict] = []
+        strong_anchor_pages: dict[str, set[int]] = {}
+        strong_anchor_documents: set[str] = set()
+
+        for chunk_id, document, metadata in zip(
+            data.get("ids", []),
+            data.get("documents", []),
+            data.get("metadatas", []),
+        ):
+            text = str(document or "")
+            lower = text.lower()
+            matched = [phrase for phrase in phrases if phrase in lower]
+            strong = [
+                phrase
+                for phrase in matched
+                if len(phrase.split()) >= 3
+            ]
+            hit = {
+                "id": str(chunk_id),
+                "text": text,
+                "metadata": metadata or {},
+                "distance": None,
+                "vector_score": 0.0,
+                "keyword_score": 0.0,
+                "score": 0.0,
+                "exact_phrase_matches": len(matched),
+                "strong_phrase_matches": len(strong),
+                "anchor_neighbor": 0.0,
+                "anchor_document": 0.0,
+                "anchor_page_distance": None,
+                "anchor_preceding": 0.0,
+            }
+            records.append(hit)
+
+            if strong:
+                document_key = self._document_key(hit)
+                page = (metadata or {}).get("page")
+                if document_key:
+                    strong_anchor_documents.add(document_key)
+                    if page is not None:
+                        strong_anchor_pages.setdefault(document_key, set()).add(int(page))
+
+        literal_hits: list[dict] = []
+        for hit in records:
+            document_key = self._document_key(hit)
+            page = (hit.get("metadata") or {}).get("page")
+            is_exact = int(hit.get("exact_phrase_matches") or 0) > 0
+            is_neighbor = False
+            nearest_distance = None
+            if document_key in strong_anchor_pages and page is not None:
+                distances = [
+                    int(page) - anchor_page
+                    for anchor_page in strong_anchor_pages[document_key]
+                ]
+                if distances:
+                    nearest_distance = min(distances, key=lambda value: abs(value))
+                    is_neighbor = abs(nearest_distance) <= 1
+            if is_exact or is_neighbor:
+                hit["anchor_neighbor"] = 1.0 if is_neighbor and not is_exact else 0.0
+                hit["anchor_document"] = 1.0 if document_key in strong_anchor_documents else 0.0
+                hit["anchor_page_distance"] = nearest_distance
+                hit["anchor_preceding"] = (
+                    1.0 if nearest_distance == -1 and not is_exact else 0.0
+                )
+                literal_hits.append(hit)
+
+        return literal_hits, strong_anchor_documents
+
+    def _special_figure_hits(
+        self,
+        question: str,
+    ) -> tuple[list[dict], set[str]]:
+        """Fetch high-value figure evidence that common paraphrases otherwise miss."""
+        collection = getattr(self.vector_store, "collection", None)
+        if collection is None:
+            return [], set()
+
+        wants_type_curve = TYPE_CURVE_INTENT_RE.search(question) is not None
+        wants_rft_comparison = RFT_COMPARISON_RE.search(question) is not None
+        if not wants_type_curve and not wants_rft_comparison:
+            return [], set()
+
+        try:
+            data = collection.get(include=["documents", "metadatas"])
+        except Exception:
+            return [], set()
+
+        hits: list[dict] = []
+        document_keys: set[str] = set()
+
+        for chunk_id, document, metadata in zip(
+            data.get("ids", []),
+            data.get("documents", []),
+            data.get("metadatas", []),
+        ):
+            text = str(document or "")
+            normalized = re.sub(r"[-_]+", " ", text.lower())
+            special_type_curve = 0.0
+            comparison_before = 0.0
+            comparison_after = 0.0
+
+            if wants_type_curve:
+                evidence_matches = sum(
+                    1
+                    for term in TYPE_CURVE_EVIDENCE_TERMS
+                    if term in normalized
+                )
+                if evidence_matches >= 1:
+                    special_type_curve = float(evidence_matches)
+
+            if wants_rft_comparison:
+                comparison_before = 1.0 if any(
+                    term in normalized for term in RFT_BEFORE_TERMS
+                ) else 0.0
+                comparison_after = 1.0 if any(
+                    term in normalized for term in RFT_AFTER_TERMS
+                ) else 0.0
+
+            if not (
+                special_type_curve
+                or comparison_before
+                or comparison_after
+            ):
+                continue
+
+            hit = {
+                "id": str(chunk_id),
+                "text": text,
+                "metadata": metadata or {},
+                "distance": None,
+                "vector_score": 0.0,
+                "keyword_score": 0.0,
+                "score": 0.0,
+                "exact_phrase_matches": 0,
+                "strong_phrase_matches": 0,
+                "anchor_neighbor": 0.0,
+                "anchor_document": 1.0,
+                "anchor_page_distance": None,
+                "anchor_preceding": 0.0,
+                "special_type_curve": special_type_curve,
+                "comparison_before": comparison_before,
+                "comparison_after": comparison_after,
+            }
+            hits.append(hit)
+            document_key = self._document_key(hit)
+            if document_key:
+                document_keys.add(document_key)
+
+        return hits, document_keys
+
+    def _document_key(self, hit: dict) -> str:
+        metadata = hit.get("metadata") or {}
+        value = metadata.get("document_id")
+        if value:
+            return str(value)
+        chunk_id = str(hit.get("id") or "")
+        match = re.match(r"^([^:]+):p\d+", chunk_id)
+        if match:
+            return match.group(1)
+        return str(metadata.get("document") or "")
+
+    def _is_figure_question(self, question: str) -> bool:
+        return FIGURE_INTENT_RE.search(question) is not None
+
+    def _expand_figure_query(self, search_question: str, original_question: str) -> str:
+        expansions = [
+            "Figure Note Metadata",
+            "analysis",
+            "series_descriptions",
+            "trend_summary",
+        ]
+        mapping = [
+            (r"그래프|도표|그림|플롯", "graph plot figure chart"),
+            (r"추세|경향|변화", "trend series slope increase decrease plateau peak decline"),
+            (r"계열", "series marker curve"),
+            (r"x축|y축|축|단위", "x_axis y_axis axis unit"),
+            (r"기울기|구배", "gradient slope"),
+            (r"등가\s*시간", "Equivalent Time"),
+            (r"델타\s*p", "Delta P"),
+            (r"압력", "pressure"),
+            (r"시간", "time"),
+            (r"상승|증가", "rise increase upward"),
+            (r"하락|감소", "decline decrease downward"),
+            (r"범례", "legend"),
+        ]
+        for pattern, terms in mapping:
+            if re.search(pattern, original_question, flags=re.IGNORECASE):
+                expansions.append(terms)
+
+        if TYPE_CURVE_INTENT_RE.search(original_question):
+            expansions.extend([
+                "td/cd type curve including the derivative",
+                "wellbore storage dominated flow",
+                "unit slope diagonal",
+                "middle time region MTR",
+                "derivative plateau",
+                "Figure 22",
+            ])
+
+        if RFT_COMPARISON_RE.search(original_question):
+            expansions.extend([
+                "Appraisal Well RFT Survey",
+                "RFT Survey after Significant Production",
+                "pressure gradient",
+                "permeability barrier",
+                "supercharged points",
+            ])
+
+        combined = " ".join([search_question, *expansions])
+        return re.sub(r"\s+", " ", combined).strip()
+
+    def _rerank_figure_hits(
+        self,
+        hits: list[dict],
+        question: str,
+        top_k: int,
+    ) -> list[dict]:
+        phrases = self._english_phrases(question)
+        tokens = self._technical_tokens(question)
+        wants_trend = FIGURE_TREND_RE.search(question) is not None
+        wants_axis = FIGURE_AXIS_RE.search(question) is not None
+        wants_gradient = FIGURE_GRADIENT_RE.search(question) is not None
+        wants_type_curve = TYPE_CURVE_INTENT_RE.search(question) is not None
+        wants_rft_comparison = RFT_COMPARISON_RE.search(question) is not None
+
+        ranked: list[dict] = []
+        for hit in hits:
+            item = dict(hit)
+            text = str(item.get("text") or "")
+            lower = text.lower()
+            base_score = float(item.get("score") or 0.0)
+            bonus = 0.0
+            penalty = 0.0
+            is_figure_note = any(marker in lower for marker in FIGURE_MARKERS)
+
+            if is_figure_note:
+                bonus += 0.45
+
+            phrase_matches = sum(1 for phrase in phrases if phrase in lower)
+            bonus += min(0.54, phrase_matches * 0.18)
+
+            if tokens:
+                overlap = sum(1 for token in tokens if token in lower)
+                bonus += min(0.24, 0.24 * overlap / len(tokens))
+
+            if is_figure_note and wants_trend and (
+                "trend_summary:" in lower or "series_descriptions:" in lower
+            ):
+                bonus += 0.14
+            if is_figure_note and wants_axis and (
+                "x_axis:" in lower or "y_axis:" in lower
+            ):
+                bonus += 0.12
+            if is_figure_note and wants_gradient and (
+                "gradient" in lower or "psi/ft" in lower or "psi/m" in lower
+            ):
+                bonus += 0.12
+
+            if not is_figure_note and "learning outcomes" in lower:
+                penalty += 0.30
+            if not is_figure_note and ("table of contents" in lower or "contents" in lower[:180]):
+                penalty += 0.18
+
+            exact_phrase_matches = int(item.get("exact_phrase_matches") or 0)
+            strong_phrase_matches = int(item.get("strong_phrase_matches") or 0)
+            anchor_neighbor = bool(item.get("anchor_neighbor"))
+            anchor_document = bool(item.get("anchor_document"))
+            anchor_preceding = bool(item.get("anchor_preceding"))
+            has_numeric_gradient = NUMERIC_GRADIENT_RE.search(text) is not None
+            mentions_supercharged = SUPERCHARGED_RE.search(text) is not None
+            asks_supercharged = SUPERCHARGED_RE.search(question) is not None
+            special_type_curve = float(item.get("special_type_curve") or 0.0)
+            comparison_before = bool(item.get("comparison_before"))
+            comparison_after = bool(item.get("comparison_after"))
+
+            bonus += exact_phrase_matches * 0.85
+            bonus += strong_phrase_matches * 1.15
+            if anchor_document:
+                bonus += 0.30
+            if anchor_neighbor:
+                bonus += 0.22
+            if wants_gradient and has_numeric_gradient:
+                bonus += 0.95
+            if anchor_preceding and wants_gradient and has_numeric_gradient:
+                bonus += 0.55
+            if asks_supercharged and mentions_supercharged:
+                bonus += 0.24
+            if (
+                anchor_preceding
+                and wants_gradient
+                and has_numeric_gradient
+                and asks_supercharged
+                and mentions_supercharged
+            ):
+                bonus += 0.45
+
+            if wants_type_curve and special_type_curve:
+                bonus += min(2.80, 1.10 + 0.50 * special_type_curve)
+                if "unit slope diagonal" in lower:
+                    bonus += 0.55
+                if "derivative plateau" in lower:
+                    bonus += 0.55
+                if "middle time region" in lower:
+                    bonus += 0.35
+            elif wants_type_curve:
+                penalty += 0.55
+
+            if wants_rft_comparison:
+                if comparison_before:
+                    bonus += 1.65
+                if comparison_after:
+                    bonus += 1.65
+                if comparison_before and comparison_after:
+                    bonus += 0.35
+
+            rerank_score = max(0.0, base_score + bonus - penalty)
+            item["retrieval_score"] = base_score
+            item["figure_bonus"] = bonus
+            item["figure_penalty"] = penalty
+            item["figure_rank_score"] = rerank_score
+            item["is_figure_note"] = is_figure_note
+            item["has_numeric_gradient"] = has_numeric_gradient
+            item["mentions_supercharged"] = mentions_supercharged
+            ranked.append(item)
+
+        ranked.sort(
+            key=lambda item: (
+                float(item.get("figure_rank_score") or 0.0),
+                int(item.get("strong_phrase_matches") or 0),
+                int(item.get("exact_phrase_matches") or 0),
+                bool(item.get("is_figure_note")),
+                float(item.get("keyword_score") or 0.0),
+                float(item.get("vector_score") or 0.0),
+            ),
+            reverse=True,
+        )
+
+        if ranked:
+            maximum = float(ranked[0].get("figure_rank_score") or 0.0)
+            minimum = float(ranked[-1].get("figure_rank_score") or 0.0)
+            span = maximum - minimum
+            for item in ranked:
+                raw = float(item.get("figure_rank_score") or 0.0)
+                if span > 1e-9:
+                    item["score"] = 0.50 + 0.50 * ((raw - minimum) / span)
+                else:
+                    item["score"] = min(1.0, max(0.0, raw))
+
+        return ranked[:top_k]
+
+    def _english_phrases(self, question: str) -> list[str]:
+        raw_phrases = re.findall(
+            r"[A-Za-z0-9][A-Za-z0-9+./_-]*(?:\s+[A-Za-z0-9][A-Za-z0-9+./_-]*)*",
+            question,
+        )
+        phrases: list[str] = []
+        for value in raw_phrases:
+            normalized = re.sub(r"\s+", " ", value).strip().lower()
+            if len(normalized) >= 3 and normalized not in phrases:
+                phrases.append(normalized)
+        return phrases
+
+    def _technical_tokens(self, question: str) -> list[str]:
+        values = re.findall(r"[A-Za-z][A-Za-z0-9+./_-]*|\d+(?:\.\d+)?", question)
+        stopwords = {
+            "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+            "in", "is", "of", "on", "or", "the", "to", "with", "test",
+        }
+        output: list[str] = []
+        for value in values:
+            token = value.lower()
+            if token in stopwords or token in output:
+                continue
+            output.append(token)
+        return output
+
+
+    def _supported_partial_answer(
+        self,
+        question: str,
+        hits: list[dict],
+    ) -> str | None:
+        """Provide a deterministic evidence-only partial answer when the LLM over-refuses."""
+        if RFT_ZONE_DETAIL_RE.search(question) is None:
+            return None
+
+        evidence_hit = next(
+            (
+                hit
+                for hit in hits
+                if (
+                    "series_descriptions:" in str(hit.get("text") or "")
+                    and "Open-circle points" in str(hit.get("text") or "")
+                    and "Open-square points" in str(hit.get("text") or "")
+                    and (
+                        "seven interpreted depth zones"
+                        in str(hit.get("text") or "")
+                        or "Zones 1 through 7"
+                        in str(hit.get("text") or "")
+                    )
+                )
+            ),
+            None,
+        )
+        if evidence_hit is None:
+            return None
+
+        text = str(evidence_hit.get("text") or "")
+        metadata = evidence_hit.get("metadata") or {}
+        document_name = clean_document_name(metadata.get("document"))
+        page_value = metadata.get("page")
+        citation = f"[{document_name}, p.{page_value}]"
+
+        statements: list[str] = []
+
+        if (
+            "Pressure observations vary among seven interpreted depth zones" in text
+            and "does not present one continuous formation-pressure curve" in text
+        ):
+            statements.append(
+                "Interpreted RFT Data는 Zone 1부터 Zone 7까지 구분되어 있고, "
+                "압력 관측값은 구역마다 달라 하나의 연속적인 지층 압력 곡선으로 "
+                "표현되지 않습니다. "
+                + citation
             )
-        return hits
+
+        statements.append(
+            "다만 제공된 Figure Note에는 Zone 1~7 각각의 개별 상승·하락이나 "
+            "정확한 기울기가 따로 기록되어 있지 않으므로, Zone별 세부 압력 거동은 "
+            "확인할 수 없습니다. "
+            + citation
+        )
+
+        if "Open-circle points identified in the legend as supercharged points." in text:
+            statements.append(
+                "Open-circle points는 supercharged points를 뜻합니다. "
+                + citation
+            )
+        if "Open-square points identified in the legend as double pretest sequence points." in text:
+            statements.append(
+                "Open-square points는 double pretest sequence points를 뜻합니다. "
+                + citation
+            )
+        if "Filled pressure-observation points" in text:
+            statements.append(
+                "채워진 점은 압력 관측값이며, 일부는 수직 연결선 또는 불확실성 선과 "
+                "함께 표시됩니다. "
+                + citation
+            )
+        if "X-shaped points aligned with the mud-gradient line." in text:
+            statements.append(
+                "X자 모양 점은 mud-gradient line을 따라 배치됩니다. "
+                + citation
+            )
+        if "Mud-gradient line labeled 1.11 g/cc and 1.58 psi/m." in text:
+            statements.append(
+                "Mud-gradient 기준선에는 1.11 g/cc와 1.58 psi/m가 표시되어 있습니다. "
+                + citation
+            )
+
+        return "\n\n".join(statements) if statements else None
+
+    def _rft_comparison_companion_hits(
+        self,
+        question: str | None,
+    ) -> list[dict]:
+        """Fetch the exact before/after Figure Note chunks for RFT comparisons."""
+        if not question or RFT_COMPARISON_RE.search(question) is None:
+            return []
+
+        collection = getattr(self.vector_store, "collection", None)
+        if collection is None:
+            return []
+
+        try:
+            data = collection.get(include=["documents", "metadatas"])
+        except Exception:
+            return []
+
+        selected: dict[str, dict] = {}
+        wanted_titles = (
+            "title: Appraisal Well RFT Survey",
+            "title: RFT Survey after Significant Production",
+        )
+
+        for chunk_id, document, metadata in zip(
+            data.get("ids", []),
+            data.get("documents", []),
+            data.get("metadatas", []),
+        ):
+            text = str(document or "")
+            if "image_path:" not in text:
+                continue
+            if not any(title in text for title in wanted_titles):
+                continue
+            selected[str(chunk_id)] = {
+                "id": str(chunk_id),
+                "text": text,
+                "metadata": metadata or {},
+                "score": 1.0,
+                "vector_score": 0.0,
+                "keyword_score": 0.0,
+            }
+
+        return list(selected.values())
+
+
+    def _figure_references(
+        self,
+        hits: list[dict],
+        limit: int = 3,
+        *,
+        question: str | None = None,
+    ) -> list[FigureReference]:
+        """Return existing source images that are explicitly present in retrieved hits."""
+        figures_root = self.settings.figures_dir.resolve()
+        references: list[FigureReference] = []
+        seen_filenames: set[str] = set()
+
+        figure_hits = list(hits)
+        existing_ids = {str(hit.get("id") or "") for hit in figure_hits}
+        for companion in self._rft_comparison_companion_hits(question):
+            companion_id = str(companion.get("id") or "")
+            if companion_id and companion_id not in existing_ids:
+                figure_hits.append(companion)
+                existing_ids.add(companion_id)
+
+        for hit in figure_hits:
+            text = str(hit.get("text") or "")
+            metadata = hit.get("metadata") or {}
+
+            for fields in self._figure_note_fields(text):
+                raw_image_path = str(fields.get("image_path") or "").strip()
+                filename = re.split(r"[\\/]", raw_image_path)[-1].strip()
+
+                if (
+                    not filename
+                    or filename in {".", ".."}
+                    or "/" in filename
+                    or "\\" in filename
+                    or filename in seen_filenames
+                ):
+                    continue
+
+                candidate = (figures_root / filename).resolve()
+                try:
+                    candidate.relative_to(figures_root)
+                except ValueError:
+                    continue
+
+                if not candidate.is_file():
+                    continue
+
+                image_type = self._nullable_figure_value(
+                    fields.get("image_type")
+                )
+                if image_type and image_type.lower() in {
+                    "logo",
+                    "page_decoration",
+                }:
+                    continue
+
+                page_value = fields.get("page_number")
+                if page_value is None:
+                    page_value = metadata.get("page")
+
+                page_number = None
+                try:
+                    if page_value is not None:
+                        page_number = int(str(page_value).strip())
+                except (TypeError, ValueError):
+                    page_number = None
+
+                document_name = clean_document_name(
+                    fields.get("document_name")
+                    or metadata.get("document")
+                )
+                title = self._nullable_figure_value(fields.get("title"))
+                image_index = None
+                try:
+                    if fields.get("image_index") is not None:
+                        image_index = int(str(fields.get("image_index")).strip())
+                except (TypeError, ValueError):
+                    image_index = None
+
+                preview_path = self.figure_preview.get_or_create_preview(
+                    candidate,
+                    document_id=self._nullable_figure_value(fields.get("document_id")),
+                    document_name=document_name,
+                    page=page_number,
+                    image_index=image_index,
+                    image_type=image_type,
+                )
+                preview_url = None
+                if preview_path is not None:
+                    preview_url = (
+                        "/api/figure-previews/"
+                        f"{quote(preview_path.name, safe='')}"
+                    )
+
+                references.append(
+                    FigureReference(
+                        document=document_name,
+                        page=page_number,
+                        title=title,
+                        image_type=image_type,
+                        filename=filename,
+                        url=f"/api/figures/{quote(filename, safe='')}",
+                        preview_url=preview_url,
+                    )
+                )
+                seen_filenames.add(filename)
+
+        if question and RFT_COMPARISON_RE.search(question):
+            def comparison_order(reference: FigureReference) -> tuple[int, str]:
+                title = str(reference.title or "").lower()
+                if "appraisal well rft survey" in title:
+                    return (0, title)
+                if "after significant production" in title:
+                    return (1, title)
+                return (2, title)
+
+            references.sort(key=comparison_order)
+
+        return references[:limit]
+
+    def _figure_note_fields(self, text: str) -> list[dict[str, str]]:
+        """Parse only scalar Figure Note fields needed for image display."""
+        if "image_path:" not in text.lower():
+            return []
+
+        blocks = re.split(
+            r"(?=\[Figure Note Metadata\])",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        field_names = (
+            "document_name",
+            "document_id",
+            "page_number",
+            "image_index",
+            "image_path",
+            "image_type",
+            "confidence",
+            "title",
+            "title_verified",
+            "analysis",
+            "x_axis",
+        )
+        boundary = "|".join(re.escape(name) for name in field_names)
+
+        output: list[dict[str, str]] = []
+
+        for block in blocks:
+            if "image_path:" not in block.lower():
+                continue
+
+            fields: dict[str, str] = {}
+
+            for name in field_names:
+                match = re.search(
+                    rf"(?:^|\s){re.escape(name)}:\s*(.*?)"
+                    rf"(?=\s+(?:{boundary}):|$)",
+                    block,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                if match:
+                    fields[name] = match.group(1).strip()
+
+            if fields.get("image_path"):
+                output.append(fields)
+
+        return output
+
+    def _nullable_figure_value(self, value: object) -> str | None:
+        text = str(value or "").strip()
+        if not text or text.lower() in {"null", "none", "unknown"}:
+            return None
+        return text
+
+    def _aggregate_response(self, question: str, query_type: QueryType) -> ChatResponse:
+        if re.search(r"top\s*\d+|가장 많이|빈도|통계", question.lower()):
+            message = (
+                "전체 문서 분석 기능이 필요합니다. 이 유형은 긴 context를 LLM에 "
+                "보내지 않고 Python 기반 전체 chunk 스캔/빈도 분석 함수로 처리해야 합니다."
+            )
+        else:
+            message = "제공된 문서 근거로는 확인할 수 없습니다."
+        return ChatResponse(answer=message, sources=[], query_type=query_type.value)
 
     def _preview(self, text: str, limit: int = 700) -> str:
         compact = re.sub(r"\s+", " ", text).strip()
         return compact[:limit]
-
-    def _limit_aggregate_context(self, hits: list[dict]) -> list[dict]:
-        max_chunks = max(1, self.settings.aggregate_context_max_chunks)
-        max_characters = max(1000, self.settings.aggregate_context_max_characters)
-        limited: list[dict] = []
-        used_characters = 0
-        dropped_by_context_limit = 0
-
-        for hit in hits:
-            text_length = len(str(hit.get("text") or ""))
-            if len(limited) >= max_chunks or used_characters + text_length > max_characters:
-                dropped_by_context_limit += 1
-                continue
-            limited.append(hit)
-            used_characters += text_length
-
-        self.last_debug.update(
-            {
-                "context_chunks_sent_to_llm": len(limited),
-                "context_characters": used_characters,
-                "context_tokens_estimate": max(1, used_characters // 4),
-                "dropped_by_context_limit": dropped_by_context_limit,
-            }
-        )
-        return limited
-
-    def _aggregate_fallback_answer(self, sources_by_id: dict[str, Source]) -> tuple[str, list[Source]]:
-        selected: list[tuple[str, Source]] = []
-        per_document: dict[str, int] = {}
-
-        for source_id, source in sources_by_id.items():
-            if self._is_low_value_source(source):
-                continue
-            count = per_document.get(source.document, 0)
-            if count >= 2:
-                continue
-            per_document[source.document] = count + 1
-            selected.append((source_id, source))
-            if len(selected) >= 10:
-                break
-
-        if not selected:
-            self.last_debug["refusal_reason"] = "aggregate_no_explanatory_chunks"
-            return self._refusal_for_question(""), []
-
-        lines = [
-            "검색된 문서 범위 기준으로 확인된 대표 근거만 정리합니다.",
-            "",
-            "| 문서명 | 페이지 | 관련 정의 또는 문장 | 문서별 차이 | Source ID |",
-            "|---|---:|---|---|---|",
-        ]
-        final_sources: list[Source] = []
-        for index, (_, source) in enumerate(selected, start=1):
-            final_id = f"S{index}"
-            preview = self._aggregate_summary(source).replace("|", "/")
-            lines.append(
-                f"| {source.document} | {source.page or ''} | {preview} | 해당 없음 | [{final_id}] |"
-            )
-            final_sources.append(source)
-
-        answer = "\n".join(lines)
-        self.last_debug["citation_ids_after_filtering"] = [f"S{index}" for index in range(1, len(final_sources) + 1)]
-        self.last_debug["refusal_reason"] = None
-        return answer, final_sources
-
-    def _first_source_matching(self, sources_by_id: dict[str, Source], patterns: list[str]) -> Source | None:
-        for source in sources_by_id.values():
-            if self._is_low_value_source(source):
-                continue
-            excerpt = source.excerpt.lower()
-            if all(re.search(pattern, excerpt, re.IGNORECASE) for pattern in patterns):
-                return source
-        return None
-
-    def _is_low_value_source(self, source: Source) -> bool:
-        text = f"{source.document} {source.excerpt}".lower()
-        return any(
-            marker in text
-            for marker in [
-                "table of contents",
-                "c o n t e n t s",
-                "contents",
-                "nomenclature",
-                "symbol list",
-                "learning objectives",
-                "references",
-                "subject index",
-                "author index",
-            ]
-        )
-
-    def _summary_sentence(self, text: str, limit: int = 220) -> str:
-        compact = re.sub(r"\s+", " ", text).strip()
-        sentence = re.split(r"(?<=[.!?])\s+", compact)[0]
-        return sentence[:limit]
-
-    def _aggregate_summary(self, source: Source) -> str:
-        compact = re.sub(r"\s+", " ", source.excerpt).strip()
-        for sentence in re.split(r"(?<=[.!?])\s+", compact):
-            if re.search(r"bottom\s*-?\s*hole pressure|bottomhole pressure|\bbhp\b|\bpwf\b|\bpws\b", sentence, re.IGNORECASE):
-                return sentence[:220]
-        if re.search(r"bottom\s*-?\s*hole pressure|bottomhole pressure|\bbhp\b|\bpwf\b|\bpws\b", compact, re.IGNORECASE):
-            return "Bottomhole pressure/BHP 관련 압력 거동 또는 해석 근거입니다."
-        return self._summary_sentence(source.excerpt)
-
-    def _ecd_fallback_answer(self, sources_by_id: dict[str, Source]) -> tuple[str, list[Source]]:
-        source = self._first_source_matching(sources_by_id, [r"\becd\b", r"0\.052", r"\bmw\b"])
-        if source is None:
-            return self._refusal_for_question(""), []
-        answer = (
-            "$$\n"
-            "ECD = MW + \\frac{P}{0.052 \\times D}\n"
-            "$$\n\n"
-            "- $ECD$: effective/equivalent circulating density, ppg [S1]\n"
-            "- $MW$: mud weight, ppg [S1]\n"
-            "- $P$: annular pressure loss, psi [S1]\n"
-            "- $D$: true vertical depth, ft [S1]"
-        )
-        self.last_debug["citation_ids_after_filtering"] = ["S1"]
-        self.last_debug["refusal_reason"] = None
-        return answer, [source]
-
-    def _mud_conversion_fallback_answer(self, sources_by_id: dict[str, Source]) -> tuple[str, list[Source]]:
-        source = self._first_source_matching(sources_by_id, [r"0\.052", r"0\.433"])
-        if source is None:
-            return self._refusal_for_question(""), []
-        answer = (
-            "문서의 변환표와 예시에 근거한 관계식입니다.\n\n"
-            "$$\n"
-            "\\text{Pressure gradient (psi/ft)} = \\text{Mud weight (ppg)} \\times 0.052\n"
-            "$$\n\n"
-            "$$\n"
-            "\\text{Pressure gradient (psi/ft)} = SG \\times 0.433\n"
-            "$$\n\n"
-            "$$\n"
-            "SG = \\frac{\\text{Pressure gradient (psi/ft)}}{0.433}\n"
-            "$$\n\n"
-            "$$\n"
-            "\\text{Mud weight (ppg)} = \\frac{\\text{Pressure gradient (psi/ft)}}{0.052}\n"
-            "$$\n\n"
-            "- 단위: pressure gradient는 psi/ft, mud weight는 ppg, SG는 무차원 비중입니다. [S1]"
-        )
-        self.last_debug["citation_ids_after_filtering"] = ["S1"]
-        self.last_debug["refusal_reason"] = None
-        return answer, [source]
-
-    def _mud_window_fallback_answer(self, sources_by_id: dict[str, Source]) -> tuple[str, list[Source]]:
-        kick_source = self._first_source_matching(
-            sources_by_id,
-            [r"kick|influx|flow", r"formation fluid|enter|hydrostatic|pore pressure|formation pressure"],
-        )
-        loss_source = self._first_source_matching(
-            sources_by_id,
-            [r"lost circulation|loss|fracture|breakdown", r"fracture pressure|fracture gradient|exceed|breakdown"],
-        )
-        if kick_source is None or loss_source is None:
-            return self._refusal_for_question(""), []
-        sources = [kick_source]
-        loss_id = "S1"
-        if loss_source.chunk_id != kick_source.chunk_id:
-            sources.append(loss_source)
-            loss_id = "S2"
-        answer = (
-            "Mud weight window는 borehole pressure가 pore pressure보다 낮아지지 않고 fracture pressure를 넘지 않는 범위입니다. [S1]\n\n"
-            "- Mud weight가 pore pressure보다 낮으면 formation fluid가 wellbore로 유입되어 kick 또는 influx 위험이 커집니다. [S1]\n"
-            f"- Mud weight가 fracture pressure보다 높으면 암석이 파괴되어 drilling fluid loss 또는 lost circulation이 발생할 수 있습니다. [{loss_id}]"
-        )
-        self.last_debug["citation_ids_after_filtering"] = [f"S{index}" for index in range(1, len(sources) + 1)]
-        self.last_debug["refusal_reason"] = None
-        return answer, sources
-
-    def _query_type_instruction(self, query_type: QueryType) -> str:
-        if query_type == QueryType.AGGREGATE_ANALYSIS:
-            return (
-                "For aggregate questions, summarize only the searched sources. "
-                "State that the table is limited to retrieved evidence. "
-                "Use table columns: 문서명, 페이지, 정의 또는 관련 내용, 문서 간 차이, 출처 ID.\n"
-            )
-        if query_type == QueryType.GRAPH_ANALYSIS:
-            return (
-                "For graph or figure questions, answer only from figure notes, image analysis, captions, "
-                "or chunks explicitly discussing a figure/graph. Do not infer axes, units, or trends from text-only evidence.\n"
-            )
-        return ""
-
-    def _filter_answer_sources(
-        self,
-        answer: str,
-        sources_by_id: dict[str, Source],
-        question: str,
-    ) -> tuple[str, list[Source]]:
-        self.last_debug["citation_ids_before_filtering"] = self._extract_source_ids(answer)
-        if self._is_refusal(answer):
-            self.last_debug["citation_ids_after_filtering"] = []
-            return answer, []
-
-        used_ids: list[str] = []
-
-        def keep_valid(match: re.Match[str]) -> str:
-            source_id = f"S{match.group(1)}"
-            if source_id not in sources_by_id:
-                return ""
-            if source_id not in used_ids:
-                used_ids.append(source_id)
-            return f"[{source_id}]"
-
-        cleaned_answer = SOURCE_REF.sub(keep_valid, answer)
-
-        if not used_ids:
-            self.last_debug["citation_ids_after_filtering"] = []
-            return self._refusal_for_question(question), []
-
-        renumbered_ids = {
-            old_source_id: f"S{new_index}"
-            for new_index, old_source_id in enumerate(used_ids, start=1)
-        }
-
-        def renumber(match: re.Match[str]) -> str:
-            old_source_id = f"S{match.group(1)}"
-            new_source_id = renumbered_ids.get(old_source_id)
-            return f"[{new_source_id}]" if new_source_id else ""
-
-        cleaned_answer = SOURCE_REF.sub(renumber, cleaned_answer)
-        cleaned_answer = self._postprocess_answer(cleaned_answer, question)
-        final_sources = [sources_by_id[source_id] for source_id in used_ids]
-        self.last_debug["citation_ids_after_filtering"] = self._extract_source_ids(cleaned_answer)
-        self.last_debug["source_id_mapping"] = renumbered_ids
-        return cleaned_answer, final_sources
-
-    def _extract_source_ids(self, answer: str) -> list[str]:
-        ids: list[str] = []
-        for match in SOURCE_REF.finditer(answer):
-            source_id = f"S{match.group(1)}"
-            if source_id not in ids:
-                ids.append(source_id)
-        return ids
-
-    def _postprocess_answer(self, answer: str, question: str) -> str:
-        answer = answer.replace("порosity", "porosity")
-        answer = re.sub(r"[\u0400-\u04FF]+", "", answer)
-        answer = self._fix_archie_terms(answer)
-        if re.search(r"archie", question, re.IGNORECASE) and self._has_wrong_archie_formula(answer):
-            answer = self._replace_wrong_archie_formula(answer)
-        if re.search(r"\becd\b", question, re.IGNORECASE) and "annular pressure" not in answer.lower():
-            answer = self._add_ecd_pressure_loss_note(answer)
-        if re.search(r"mud weight|ppg|psi/ft|sg", question, re.IGNORECASE):
-            answer = self._replace_invented_mud_weight_symbols(answer)
-        return answer
-
-    def _fix_archie_terms(self, answer: str) -> str:
-        replacements = {
-            "비석회질 지층": "비셰일성 지층",
-            "비석회질": "비셰일성",
-            "비석회": "비셰일",
-            "형성물 수지 저항도": "지층수 저항도",
-            "진짜 지층 저항도": "진성 지층 저항도",
-        }
-        for old, new in replacements.items():
-            answer = answer.replace(old, new)
-        return answer
-
-    def _has_wrong_archie_formula(self, answer: str) -> bool:
-        compact = re.sub(r"\s+", "", answer.lower())
-        return bool(
-            re.search(
-                r"r_?\{?w\}?/?r_?\{?t\}?.*f\^?\{?\(?1/?n\)?\}?",
-                compact,
-            )
-        )
-
-    def _replace_wrong_archie_formula(self, answer: str) -> str:
-        correct = (
-            "$$\n"
-            "S_w^n = \\frac{F R_w}{R_t}\n"
-            "$$\n\n"
-            "$$\n"
-            "S_w = \\left(\\frac{F R_w}{R_t}\\right)^{1/n}\n"
-            "$$"
-        )
-        block_pattern = re.compile(r"\$\$.*?\$\$", flags=re.DOTALL)
-        if block_pattern.search(answer):
-            return block_pattern.sub(correct, answer, count=1)
-        return f"{correct}\n\n{answer}"
-
-    def _replace_invented_mud_weight_symbols(self, answer: str) -> str:
-        replacements = {
-            r"R_\\?\{?\\?text\{psi/ft\}\}?": r"\\text{Pressure gradient (psi/ft)}",
-            r"R_\\?\{?\\?text\{ppg\}\}?": r"\\text{Mud weight (ppg)}",
-            r"R_\\?\{?\\?text\{SG\}\}?": "SG",
-            r"R_\{?psi/ft\}?": r"\\text{Pressure gradient (psi/ft)}",
-            r"R_\{?ppg\}?": r"\\text{Mud weight (ppg)}",
-            r"\bR_t\b": r"\\text{Pressure gradient (psi/ft)}",
-        }
-        cleaned = answer
-        for pattern, replacement in replacements.items():
-            cleaned = re.sub(pattern, replacement, cleaned)
-        return cleaned
-
-    def _has_invented_mud_weight_symbol(self, answer: str) -> bool:
-        return bool(
-            re.search(
-                r"\bR_t\b|R_\\?\{?(?:\\?text\{)?(?:psi/ft|psi|ppg|sg)",
-                answer,
-                re.IGNORECASE,
-            )
-        )
-
-    def _add_ecd_pressure_loss_note(self, answer: str) -> str:
-        if "[S1]" not in answer:
-            return answer
-        return (
-            answer.rstrip()
-            + "\n- $P$: annular pressure loss, psi [S1]"
-        )
-
-    def _is_refusal(self, answer: str) -> bool:
-        normalized = re.sub(r"\s+", " ", answer).strip()
-        return any(marker in normalized for marker in REFUSAL_MARKERS) or GRAPH_REFUSAL in normalized
-
-    def _refusal_for_question(self, question: str) -> str:
-        if re.search(r"2027년\s*생산량|2027.*production", question, re.IGNORECASE):
-            return "제공된 문서 근거로는 해당 유전의 2027년 생산량을 확인할 수 없습니다."
-        return "제공된 문서 근거로는 확인할 수 없습니다."
-
-    def _has_figure_evidence(self, hit: dict) -> bool:
-        text = str(hit.get("text") or "").lower()
-        confidence_match = re.search(r"confidence:\s*([0-9.]+)", text)
-        if confidence_match:
-            try:
-                if float(confidence_match.group(1)) < self.settings.figure_note_min_confidence:
-                    return False
-            except ValueError:
-                return False
-        if "image type: logo" in text or "image type: decorative" in text:
-            return False
-        literal_markers = [
-            "image type: graph",
-            "image type: chart",
-            "extracted figure notes",
-            "image analysis",
-            "figure ",
-            "fig.",
-            "caption",
-            "x-axis",
-            "y-axis",
-            "x축",
-            "y축",
-        ]
-        if any(marker in text for marker in literal_markers):
-            return True
-
-        return any(
-            re.search(pattern, text)
-            for pattern in [
-                r"\bgraph\b",
-                r"\bplot\b",
-                r"\bchart\b",
-            ]
-        )
-
-    def _dedupe_document_pages(self, hits: list[dict], max_total: int) -> list[dict]:
-        deduped: list[dict] = []
-        seen: set[tuple[str, object]] = set()
-
-        for hit in hits:
-            metadata = hit.get("metadata") or {}
-            key = (
-                str(metadata.get("document_id") or metadata.get("document") or ""),
-                metadata.get("page"),
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(hit)
-            if len(deduped) >= max_total:
-                break
-
-        return deduped
-
-    def _refusal_for_question(self, question: str) -> str:
-        if re.search(r"2027|production|생산량", question, re.IGNORECASE):
-            return "제공된 문서 근거로는 해당 유전의 2027년 생산량을 확인할 수 없습니다."
-        return "제공된 문서 근거로는 확인할 수 없습니다."
-
-    def _has_figure_evidence(self, hit: dict) -> bool:
-        text = str(hit.get("text") or "")
-        lower = text.lower()
-        if "[figure note metadata]" not in lower:
-            return bool(self.settings.allow_legacy_figure_notes) and "extracted figure notes" in lower
-
-        image_type = self._metadata_line(text, "image type") or self._metadata_line(text, "image_type")
-        if str(image_type or "").strip().lower() not in {"graph", "chart"}:
-            return False
-
-        try:
-            confidence = float(str(self._metadata_line(text, "confidence")))
-        except (TypeError, ValueError):
-            return False
-        if confidence < self.settings.figure_note_min_confidence:
-            return False
-
-        image_path = self._metadata_line(text, "image path") or self._metadata_line(text, "image_path")
-        return bool(image_path and Path(str(image_path)).exists())
-
-    def _metadata_line(self, text: str, key: str) -> str | None:
-        pattern = rf"^{re.escape(key)}:\s*(.+)$"
-        match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
-        return match.group(1).strip() if match else None

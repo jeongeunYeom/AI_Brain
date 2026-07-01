@@ -84,6 +84,7 @@ class OllamaClient:
         self,
         image_path: Path,
         prompt: str | None = None,
+        num_predict: int | None = None,
     ) -> str:
         # PDF에서 추출된 이미지를 일반 RGB PNG로 재변환
         try:
@@ -171,7 +172,7 @@ class OllamaClient:
             "options": {
                 "temperature": 0,
                 "num_ctx": 4096,
-                "num_predict": 160,
+                "num_predict": num_predict if num_predict is not None else 160,
             },
         }
 

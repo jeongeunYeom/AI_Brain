@@ -7,11 +7,93 @@ import { PlotPanel } from "@/components/PlotPanel";
 import { SystemStatusPanel } from "@/components/SystemStatusPanel";
 import { MarkdownMath } from "@/components/MarkdownMath";
 
+
+type FigureReference = {
+  document: string;
+  page?: number | null;
+  title?: string | null;
+  image_type?: string | null;
+  filename: string;
+  url: string;
+  preview_url?: string | null;
+};
+
+type ChatResponseWithFigures = ChatResponse & {
+  figures?: FigureReference[];
+};
+
+const API_BASE_URL = (
+  process.env.NEXT_PUBLIC_API_URL ??
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  "http://127.0.0.1:8000/api"
+).replace(/\/$/, "");
+
+function resolveFigureUrl(value: string): string {
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+
+  if (value.startsWith("/api/")) {
+    return `${API_BASE_URL.replace(/\/api$/, "")}${value}`;
+  }
+
+  return `${API_BASE_URL}/${value.replace(/^\//, "")}`;
+}
+
+function FigureImage({
+  figure,
+  className,
+  loading,
+}: {
+  figure: FigureReference;
+  className: string;
+  loading?: "eager" | "lazy";
+}) {
+  const originalUrl = resolveFigureUrl(figure.url);
+  const previewUrl = figure.preview_url
+    ? resolveFigureUrl(figure.preview_url)
+    : null;
+  const [source, setSource] = useState(previewUrl ?? originalUrl);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setSource(previewUrl ?? originalUrl);
+    setFailed(false);
+  }, [originalUrl, previewUrl]);
+
+  if (failed) {
+    return (
+      <span className="text-xs font-medium text-slate-400">
+        Image unavailable
+      </span>
+    );
+  }
+
+  return (
+    <img
+      src={source}
+      alt={
+        figure.title ??
+        `${figure.document} p.${figure.page ?? "?"} figure`
+      }
+      loading={loading}
+      className={className}
+      onError={() => {
+        if (previewUrl && source !== originalUrl) {
+          setSource(originalUrl);
+          return;
+        }
+        setFailed(true);
+      }}
+    />
+  );
+}
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
-  response?: ChatResponse;
+  response?: ChatResponseWithFigures;
 };
 
 type SavedChat = {
@@ -80,6 +162,22 @@ export default function Home() {
   const [uploadJob, setUploadJob] = useState<UploadJob | null>(null);
   const [expandedSource, setExpandedSource] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(300);
+  const [selectedFigure, setSelectedFigure] = useState<FigureReference | null>(null);
+
+  useEffect(() => {
+    if (!selectedFigure) {
+      return;
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSelectedFigure(null);
+      }
+    }
+
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [selectedFigure]);
 
 
   useEffect(() => {
@@ -170,6 +268,7 @@ export default function Home() {
     setStatus(null);
     setExpandedSource(null);
     setVision(null);
+    setSelectedFigure(null);
   }
 
   function openSavedChat(chat: SavedChat) {
@@ -179,6 +278,7 @@ export default function Home() {
     setStatus(null);
     setExpandedSource(null);
     setVision(null);
+    setSelectedFigure(null);
   }
 
   function deleteSavedChat(chatId: string) {
@@ -295,7 +395,9 @@ export default function Home() {
     setStatus("Searching vector database and asking Qwen3...");
 
     try {
-      const result = await askQuestion(submittedQuestion);
+      const result = (await askQuestion(
+        submittedQuestion,
+      )) as ChatResponseWithFigures;
 
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(),
@@ -543,6 +645,12 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-2 text-slate-500">
+            <a
+              href="/review"
+              className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+            >
+              Figure review
+            </a>
             <span className="rounded-full border border-slate-200 px-3 py-1 text-xs">Qwen3 8B</span>
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100">☾</span>
           </div>
@@ -579,6 +687,7 @@ export default function Home() {
 
               const response = message.response;
               const sourceCount = response?.sources?.length ?? 0;
+              const figures = response?.figures ?? [];
 
               return (
                 <div key={message.id} className="flex gap-3">
@@ -588,6 +697,47 @@ export default function Home() {
 
                   <div className="max-w-[86%] rounded-3xl rounded-tl-md bg-white px-5 py-4 text-sm leading-7 text-slate-700 shadow-sm ring-1 ring-slate-200">
                     <MarkdownMath content={message.content} />
+
+
+                    {figures.length > 0 && (
+                      <div className="mt-5 border-t border-slate-100 pt-4">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                          Related figures
+                        </h3>
+
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          {figures.map((figure) => (
+                            <button
+                              key={`${message.id}:${figure.filename}`}
+                              type="button"
+                              onClick={() => setSelectedFigure(figure)}
+                              className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 text-left transition hover:border-indigo-300 hover:shadow-md"
+                            >
+                              <div className="flex h-48 items-center justify-center bg-white p-2">
+                                <FigureImage
+                                  figure={figure}
+                                  loading="lazy"
+                                  className="max-h-full max-w-full object-contain"
+                                />
+                              </div>
+
+                              <div className="border-t border-slate-200 px-3 py-2">
+                                <p className="truncate text-xs font-semibold text-slate-800">
+                                  {figure.title ?? "Retrieved figure"}
+                                </p>
+                                <p className="mt-1 truncate text-[11px] text-slate-500">
+                                  {figure.document}
+                                  {figure.page ? ` · p.${figure.page}` : ""}
+                                  {figure.image_type
+                                    ? ` · ${figure.image_type}`
+                                    : ""}
+                                </p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {sourceCount > 0 && (
                       <div className="mt-5 border-t border-slate-100 pt-4">
@@ -717,6 +867,64 @@ export default function Home() {
           <p className="mt-2 text-center text-[11px] text-slate-400">AI_Brain can make mistakes. Check retrieved sources and page numbers.</p>
         </form>
       </section>
+
+
+      {selectedFigure && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={selectedFigure.title ?? "Retrieved figure"}
+          onClick={() => setSelectedFigure(null)}
+        >
+          <div
+            className="relative flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label="Close figure"
+              onClick={() => setSelectedFigure(null)}
+              className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-slate-900/75 text-xl text-white hover:bg-slate-900"
+            >
+              ×
+            </button>
+
+            <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-slate-100 p-4">
+              <FigureImage
+                figure={selectedFigure}
+                loading="eager"
+                className="max-h-[78vh] max-w-full object-contain"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border-t border-slate-200 px-5 py-4">
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-slate-900">
+                  {selectedFigure.title ?? "Retrieved figure"}
+                </p>
+                <p className="mt-1 truncate text-sm text-slate-500">
+                  {selectedFigure.document}
+                  {selectedFigure.page
+                    ? ` · p.${selectedFigure.page}`
+                    : ""}
+                  {selectedFigure.image_type
+                    ? ` · ${selectedFigure.image_type}`
+                    : ""}
+                </p>
+              </div>
+              <a
+                href={resolveFigureUrl(selectedFigure.url)}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 text-sm font-semibold text-indigo-600 hover:text-indigo-700"
+              >
+                View original
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

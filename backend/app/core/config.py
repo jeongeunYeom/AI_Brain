@@ -148,6 +148,24 @@ class Settings:
         default_factory=lambda: os.getenv("ALLOW_LEGACY_FIGURE_NOTES", "0") == "1"
     )
 
+    figure_analysis_max_vision_calls: int = field(
+        default_factory=lambda: int(
+            os.getenv("FIGURE_ANALYSIS_MAX_VISION_CALLS", "80")
+        )
+    )
+
+    figure_page_render_fallback: bool = field(
+        default_factory=lambda: os.getenv(
+            "FIGURE_PAGE_RENDER_FALLBACK", "1"
+        ) == "1"
+    )
+
+    figure_page_render_scale: float = field(
+        default_factory=lambda: float(
+            os.getenv("FIGURE_PAGE_RENDER_SCALE", "3.0")
+        )
+    )
+
     @property
     def raw_dir(self) -> Path:
         return self.data_dir / "raw"
@@ -163,6 +181,14 @@ class Settings:
     @property
     def figure_notes_dir(self) -> Path:
         return self.data_dir / "figure_notes"
+
+    @property
+    def figure_candidates_dir(self) -> Path:
+        return self.data_dir / "figure_candidates"
+
+    @property
+    def figure_analysis_inputs_dir(self) -> Path:
+        return self.data_dir / "figure_analysis_inputs"
 
     @property
     def vector_db_dir(self) -> Path:
@@ -186,6 +212,8 @@ def get_settings() -> Settings:
         settings.extracted_dir,
         settings.figures_dir,
         settings.figure_notes_dir,
+        settings.figure_candidates_dir,
+        settings.figure_analysis_inputs_dir,
         settings.vector_db_dir,
         settings.metadata_dir,
         settings.evaluation_dir,

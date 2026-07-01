@@ -60,3 +60,10 @@ logs/
 Thumbs.db
 .vscode/
 .idea/
+*.bak
+*.bak.*
+patches/
+_tmp_*
+**/_tmp_*
+backend/.pycache-check/
+*.pyc
