@@ -110,3 +110,32 @@ def test_missing_citation_is_warning_not_error():
     )
     assert result.passed is True
     assert result.warnings
+
+
+
+def test_radial_derivative_unit_slope_is_blocked():
+    answer = (
+        "Wellbore storage에서는 pressure와 derivative가 겹치며 "
+        "unit-slope를 따른다. "
+        "Radial flow에서는 pressure derivative가 unit-slope를 "
+        "따르면서 plateau를 형성한다. "
+        "[Well Test Analysis, p.219]"
+    )
+    result = EngineeringValidator().validate_well_test_answer(
+        "Wellbore storage와 radial flow를 구분해줘.",
+        answer,
+        retrieved_sources=SOURCES,
+    )
+    assert result.passed is False
+    assert "WT-RADIAL-005" in result.rule_ids
+    assert "WT-RADIAL-001" not in result.rule_ids
+
+
+def test_pressure_derivative_is_not_bare_pressure():
+    validator = EngineeringValidator()
+    assert validator._mentions_derivative(
+        "pressure derivative가 plateau를 형성한다"
+    )
+    assert not validator._mentions_pressure(
+        "pressure derivative가 plateau를 형성한다"
+    )

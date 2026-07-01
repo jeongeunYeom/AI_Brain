@@ -80,6 +80,18 @@ class EngineeringValidator:
                 continue
 
             if (
+                self._mentions_derivative(sentence)
+                and self._mentions_unit_slope(sentence)
+                and not self._is_negated_or_corrective(sentence)
+            ):
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-RADIAL-005",
+                    "Radial flow에서 pressure derivative가 unit-slope를 따른다고 설명했습니다.",
+                )
+
+            if (
                 self._mentions_pressure(sentence)
                 and self._mentions_unit_slope(sentence)
                 and not self._is_negated_or_corrective(sentence)
@@ -204,7 +216,14 @@ class EngineeringValidator:
 
     @staticmethod
     def _mentions_pressure(value: str) -> bool:
-        return bool(re.search(r"pressure|압력", value, re.IGNORECASE))
+        return bool(
+            re.search(
+                r"pressure(?!\s*derivative)|"
+                r"압력(?!\s*(?:derivative|미분))",
+                value,
+                re.IGNORECASE,
+            )
+        )
 
     @staticmethod
     def _mentions_derivative(value: str) -> bool:
