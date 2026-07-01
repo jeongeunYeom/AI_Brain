@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageStat, UnidentifiedImageError
 
 from app.core.config import Settings
 from app.models.schemas import DocumentRecord
 from app.services.chunking import chunk_pages
+from app.services.figure_analysis import FigureAnalysisResult, FigureAnalysisService
 
 if TYPE_CHECKING:
     from fastapi import UploadFile
@@ -19,13 +22,39 @@ if TYPE_CHECKING:
 
 
 SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".png", ".jpg", ".jpeg", ".ppt", ".pptx"}
-MAX_FIGURE_ANALYSES = 20
-
-
 class DocumentProcessor:
     def __init__(self, settings: Settings, ollama: OllamaClient):
         self.settings = settings
         self.ollama = ollama
+        self.figure_analyzer = FigureAnalysisService(settings, ollama)
+        self._figure_stats = self._empty_figure_stats()
+
+    @staticmethod
+    def _empty_figure_stats() -> dict[str, int]:
+        return {
+            "analyzed": 0,
+            "valid": 0,
+            "review_required": 0,
+            "failed": 0,
+            "ignored": 0,
+            "vision_calls": 0,
+        }
+
+    def _record_figure_result(self, result: FigureAnalysisResult) -> None:
+        self._figure_stats["vision_calls"] += result.vision_calls
+        if result.status in self._figure_stats:
+            self._figure_stats[result.status] += 1
+        if result.status != "ignored":
+            self._figure_stats["analyzed"] += 1
+
+    @staticmethod
+    def _display_filename(file_path: Path, digest: str) -> str:
+        prefix = f"{digest}_"
+        return (
+            file_path.name[len(prefix):]
+            if file_path.name.startswith(prefix)
+            else file_path.name
+        )
 
     async def save_upload(self, upload: UploadFile) -> tuple[Path, str]:
         suffix = Path(upload.filename or "uploaded").suffix.lower()
@@ -58,25 +87,180 @@ class DocumentProcessor:
         )
 
     @staticmethod
-    def should_analyze_image(image_path: Path) -> bool:
-        """Return True only for images large enough to contain a useful figure."""
+    def classify_image_candidate(image_path: Path) -> dict[str, object]:
+        """Classify obvious non-figure images before spending a vision call."""
         try:
-            if image_path.stat().st_size < 20_000:
-                return False
+            file_size = image_path.stat().st_size
 
             with Image.open(image_path) as image:
                 width, height = image.size
+                rgb_image = image.convert("RGB").resize((64, 64))
+                stat = ImageStat.Stat(rgb_image)
 
-            if width < 350 or height < 250:
-                return False
+            area = width * height
+            aspect_ratio = width / max(height, 1)
+            contrast = sum(stat.stddev) / max(len(stat.stddev), 1)
 
-            if width * height < 150_000:
-                return False
+            result: dict[str, object] = {
+                "image_type": "unknown",
+                "confidence": 0.6,
+                "should_analyze": True,
+                "width": width,
+                "height": height,
+                "file_size": file_size,
+                "contrast": round(float(contrast), 2),
+                "reason": "",
+            }
 
-            return True
+            if file_size < 20_000 or width < 350 or height < 250 or area < 150_000:
+                result.update(
+                    {
+                        "image_type": "decorative",
+                        "confidence": 0.1,
+                        "should_analyze": False,
+                        "reason": "too small or low resolution",
+                    }
+                )
+                return result
+
+            if contrast < 8:
+                result.update(
+                    {
+                        "image_type": "decorative",
+                        "confidence": 0.1,
+                        "should_analyze": False,
+                        "reason": "nearly monochrome",
+                    }
+                )
+                return result
+
+            if aspect_ratio > 8 or aspect_ratio < 0.125:
+                result.update(
+                    {
+                        "image_type": "decorative",
+                        "confidence": 0.2,
+                        "should_analyze": False,
+                        "reason": "extreme aspect ratio",
+                    }
+                )
+                return result
+
+            if height < 320 and width < 900:
+                result.update(
+                    {
+                        "image_type": "logo",
+                        "confidence": 0.35,
+                        "should_analyze": False,
+                        "reason": "small banner/logo-like image",
+                    }
+                )
+                return result
+
+            return result
 
         except (OSError, ValueError, UnidentifiedImageError):
-            return False
+            return {
+                "image_type": "unknown",
+                "confidence": 0.0,
+                "should_analyze": False,
+                "reason": "unreadable image",
+            }
+
+    @staticmethod
+    def should_analyze_image(image_path: Path) -> bool:
+        """Return True only for images large enough to contain a useful figure."""
+        return bool(DocumentProcessor.classify_image_candidate(image_path).get("should_analyze"))
+
+    def build_figure_note(
+        self,
+        *,
+        document_name: str,
+        page_number: int,
+        image_index: int,
+        image_path: Path,
+        note: str,
+        page_text: str,
+        candidate: dict[str, object],
+    ) -> str:
+        metadata = self._classify_figure_note(note, candidate)
+        related_text = re.sub(r"\s+", " ", page_text).strip()[:800]
+        return "\n".join(
+            [
+                "[Figure Note Metadata]",
+                f"Document: {document_name}",
+                f"Page: {page_number}",
+                f"Image Path: {image_path}",
+                f"image_path: {image_path}",
+                f"Image Number: {image_index}",
+                f"Image Type: {metadata['image_type']}",
+                f"image_type: {metadata['image_type']}",
+                f"Confidence: {metadata['confidence']}",
+                f"confidence: {metadata['confidence']}",
+                f"X Axis Confirmed: {metadata['x_axis_confirmed']}",
+                f"x_axis_verified: {metadata['x_axis_confirmed']}",
+                f"Y Axis Confirmed: {metadata['y_axis_confirmed']}",
+                f"y_axis_verified: {metadata['y_axis_confirmed']}",
+                f"Units Confirmed: {metadata['units_confirmed']}",
+                f"units_verified: {metadata['units_confirmed']}",
+                f"Analysis Model: {self.settings.vision_model}",
+                f"Created At: {datetime.now(timezone.utc).isoformat()}",
+                f"Related Page Text: {related_text}",
+                "",
+                "[Analysis]",
+                note,
+            ]
+        )
+
+    def _classify_figure_note(self, note: str, candidate: dict[str, object]) -> dict[str, object]:
+        lower = note.lower()
+        image_type = str(candidate.get("image_type") or "unknown")
+        if image_type in {"logo", "decorative"}:
+            base_confidence = float(candidate.get("confidence") or 0.0)
+        else:
+            base_confidence = 0.55
+
+        if any(term in lower for term in ["x-axis", "y-axis", "axis", "legend", "trend", "plot", "graph", "x축", "y축"]):
+            image_type = "graph"
+            base_confidence = 0.75
+        elif any(term in lower for term in ["chart", "bar chart", "line chart"]):
+            image_type = "chart"
+            base_confidence = 0.7
+        elif "table" in lower or "표" in note:
+            image_type = "table"
+            base_confidence = 0.65
+        elif any(term in lower for term in ["equation", "formula", "수식"]):
+            image_type = "equation"
+            base_confidence = 0.65
+        elif any(term in lower for term in ["logo", "decorative", "장식"]):
+            image_type = "logo"
+            base_confidence = 0.2
+        elif any(term in lower for term in ["photograph", "photo", "image shows"]):
+            image_type = "photograph"
+            base_confidence = 0.45
+
+        uncertainty_penalty = lower.count("확인할 수 없음") * 0.08 + lower.count("cannot determine") * 0.08
+        x_axis = any(term in lower for term in ["x-axis", "x axis", "x축"])
+        y_axis = any(term in lower for term in ["y-axis", "y axis", "y축"])
+        units = any(term in lower for term in ["unit", "units", "단위", "psi", "ft", "ppg", "sg"])
+        confidence = max(0.0, min(1.0, base_confidence - uncertainty_penalty))
+
+        return {
+            "image_type": image_type,
+            "confidence": round(confidence, 2),
+            "x_axis_confirmed": x_axis,
+            "y_axis_confirmed": y_axis,
+            "units_confirmed": units,
+        }
+
+    @staticmethod
+    def _figure_note_confidence(note: str) -> float:
+        match = re.search(r"^Confidence:\s*([0-9.]+)", note, flags=re.MULTILINE)
+        if not match:
+            return 0.5
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return 0.0
 
     async def extract(
         self,
@@ -84,14 +268,11 @@ class DocumentProcessor:
         digest: str,
         analyze_figures: bool = True,
     ) -> tuple[DocumentRecord, list[dict[str, object]]]:
+        self._figure_stats = self._empty_figure_stats()
         suffix = file_path.suffix.lower()
 
         # 실제 저장 파일명에서 SHA-256 접두사 제거
-        display_filename = file_path.name
-        digest_prefix = f"{digest}_"
-
-        if display_filename.startswith(digest_prefix):
-            display_filename = display_filename[len(digest_prefix):]
+        display_filename = self._display_filename(file_path, digest)
 
         if suffix == ".pdf":
             pages, figure_count = await self._extract_pdf(
@@ -127,6 +308,12 @@ class DocumentProcessor:
             pages=len(pages),
             chunks=len(chunks),
             figures=figure_count,
+            figures_analyzed=self._figure_stats["analyzed"],
+            figures_valid=self._figure_stats["valid"],
+            figures_review_required=self._figure_stats["review_required"],
+            figures_failed=self._figure_stats["failed"],
+            figures_ignored=self._figure_stats["ignored"],
+            figure_vision_calls=self._figure_stats["vision_calls"],
             title=document_info.get("title"),
             document_type=document_info.get("document_type"),
             contents_pages=document_info.get("contents_pages", []),
@@ -162,22 +349,74 @@ class DocumentProcessor:
         file_path: Path,
         digest: str,
     ) -> list[dict[str, object]]:
-        target = self.settings.figures_dir / f"{digest}_{file_path.name}"
+        display_filename = self._display_filename(file_path, digest)
+        target = self.settings.figures_dir / f"{digest}_{display_filename}"
         if not target.exists():
             shutil.copyfile(file_path, target)
 
-        note = await self.ollama.describe_image(target)
-        if note.strip():
-            note_path = self.settings.figure_notes_dir / f"{target.stem}.md"
-            note_path.write_text(note, encoding="utf-8")
+        result = await self.figure_analyzer.analyze_figure(
+            document_name=display_filename,
+            document_id=digest,
+            page_number=1,
+            image_index=1,
+            image_path=target,
+            remaining_vision_calls=self.settings.figure_analysis_max_vision_calls,
+        )
+        self._record_figure_result(result)
+
+        if result.should_index and result.note_text:
+            text = f"Image analysis for {display_filename}:\n{result.note_text}"
+        else:
+            text = (
+                f"Image analysis status for {display_filename}: {result.status}. "
+                "The image note was not included in retrieval because it was not fully grounded."
+            )
 
         return [
             {
                 "page": 1,
-                "text": f"Image analysis for {file_path.name}:\n{note}",
+                "text": text,
                 "document_id": digest,
             }
         ]
+
+    def _render_page_image_crop(
+        self,
+        page: object,
+        xref: int,
+        figure_path: Path,
+    ) -> Path | None:
+        if not self.settings.figure_page_render_fallback:
+            return None
+        try:
+            import fitz
+
+            rects = list(page.get_image_rects(xref))
+            if not rects:
+                return None
+            rect = max(rects, key=lambda item: float(item.width * item.height))
+            if rect.width <= 1 or rect.height <= 1:
+                return None
+
+            target = (
+                self.settings.figure_analysis_inputs_dir
+                / f"{figure_path.stem}_page_render.png"
+            )
+            if not target.exists():
+                scale = max(1.0, self.settings.figure_page_render_scale)
+                pixmap = page.get_pixmap(
+                    matrix=fitz.Matrix(scale, scale),
+                    clip=rect,
+                    alpha=False,
+                )
+                pixmap.save(str(target))
+            return target if target.is_file() else None
+        except Exception as exc:  # one bad crop must not stop PDF ingestion
+            print(
+                f"[페이지 렌더링 fallback 건너뜀] {figure_path.name}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return None
 
     async def _extract_pdf(
         self,
@@ -189,15 +428,14 @@ class DocumentProcessor:
         import pdfplumber
 
         pages: list[dict[str, object]] = []
+        figure_jobs: list[dict[str, object]] = []
         figure_count = 0
         vision_calls = 0
-        note_cache: dict[int, str] = {}
         plumber_pdf = None
+        display_filename = self._display_filename(file_path, digest)
 
         doc = fitz.open(file_path)
 
-        # pdfplumber는 보조 추출기로만 사용합니다.
-        # 일부 손상되거나 비표준인 PDF는 pdfminer 단계에서 예외가 발생할 수 있습니다.
         try:
             plumber_pdf = pdfplumber.open(file_path)
         except Exception as exc:
@@ -210,24 +448,24 @@ class DocumentProcessor:
         try:
             total_pages = len(doc)
 
+            # Pass 1: extract every page and image without spending Vision calls.
+            # This prevents front-matter decorations from consuming the entire
+            # per-document Vision budget before later technical graphs are seen.
             for index, page in enumerate(doc):
                 page_number = index + 1
 
                 if page_number == 1 or page_number % 25 == 0:
                     print(f"[PDF 텍스트 추출] {page_number}/{total_pages}페이지")
 
-                # PyMuPDF를 기본 텍스트 추출기로 사용
                 try:
                     text = page.get_text("text").strip()
                 except Exception as exc:
                     print(
-                        f"[PyMuPDF 텍스트 추출 실패] "
-                        f"{page_number}페이지: "
+                        f"[PyMuPDF 텍스트 추출 실패] {page_number}페이지: "
                         f"{type(exc).__name__}: {exc}"
                     )
                     text = ""
 
-                # PyMuPDF 결과가 없을 때만 pdfplumber를 보조로 사용
                 plumber_text = ""
                 if (
                     not text
@@ -240,31 +478,30 @@ class DocumentProcessor:
                         ).strip()
                     except Exception as exc:
                         print(
-                            f"[pdfplumber 건너뜀] "
-                            f"{page_number}페이지: "
+                            f"[pdfplumber 건너뜀] {page_number}페이지: "
                             f"{type(exc).__name__}: {exc}"
                         )
-                        plumber_text = ""
 
                 combined = text or plumber_text
-                figure_notes: list[str] = []
+                pages.append(
+                    {
+                        "page": page_number,
+                        "text": combined,
+                        "document_id": digest,
+                    }
+                )
 
                 try:
                     page_images = page.get_images(full=True)
                 except Exception as exc:
                     print(
-                        f"[페이지 이미지 목록 건너뜀] "
-                        f"{page_number}페이지: "
+                        f"[페이지 이미지 목록 건너뜀] {page_number}페이지: "
                         f"{type(exc).__name__}: {exc}"
                     )
                     page_images = []
 
-                for image_index, image_info in enumerate(
-                    page_images,
-                    start=1,
-                ):
+                for image_index, image_info in enumerate(page_images, start=1):
                     xref = image_info[0]
-
                     try:
                         extracted_image = doc.extract_image(xref)
                         image_bytes = extracted_image.get("image")
@@ -276,12 +513,9 @@ class DocumentProcessor:
                             self.settings.figures_dir
                             / f"{digest}_p{page_number}_fig{image_index}.{extension}"
                         )
-
                         if not figure_path.exists():
                             figure_path.write_bytes(image_bytes)
-
                         figure_count += 1
-
                     except Exception as exc:
                         print(
                             f"[PDF 이미지 추출 건너뜀] "
@@ -293,87 +527,136 @@ class DocumentProcessor:
                     if not analyze_figures:
                         continue
 
-                    note = note_cache.get(xref, "")
-                    note_path = (
-                        self.settings.figure_notes_dir
-                        / f"{figure_path.stem}.md"
+                    priority = self.figure_analyzer.priority_for_image(
+                        figure_path,
+                        combined,
+                    )
+                    figure_jobs.append(
+                        {
+                            "page_index": index,
+                            "page_number": page_number,
+                            "image_index": image_index,
+                            "xref": xref,
+                            "image_path": figure_path,
+                            "page_text": combined,
+                            "priority_score": float(priority.get("score") or 0.0),
+                            "forced_classification": priority.get(
+                                "forced_classification"
+                            ),
+                            "priority_reason": str(
+                                priority.get("reason") or ""
+                            ),
+                        }
                     )
 
-                    if not note and note_path.exists():
-                        try:
-                            note = note_path.read_text(
-                                encoding="utf-8"
-                            ).strip()
-                        except OSError:
-                            note = ""
-
-                    if not note:
-                        if vision_calls >= MAX_FIGURE_ANALYSES:
-                            continue
-
-                        if not self.should_analyze_image(figure_path):
-                            continue
-
-                        vision_calls += 1
-                        print(
-                            f"[PDF 이미지 분석] {vision_calls}/"
-                            f"{MAX_FIGURE_ANALYSES}: {figure_path.name}"
-                        )
-
-                        try:
-                            note = (
-                                await self.ollama.describe_image(
-                                    figure_path
-                                )
-                            ).strip()
-                        except Exception as exc:
-                            print(
-                                f"[PDF 이미지 분석 건너뜀] "
-                                f"{figure_path.name}: "
-                                f"{type(exc).__name__}: {exc}"
-                            )
-                            note = ""
-
-                        # 실패한 빈 결과는 저장하지 않음
-                        if note:
-                            note_path.write_text(
-                                note,
-                                encoding="utf-8",
-                            )
-
-                    note_cache[xref] = note
-
-                    if note:
-                        figure_notes.append(
-                            f"Figure {image_index}: {note}"
-                        )
-
-                if figure_notes:
-                    combined += (
-                        "\n\n[Extracted figure notes]\n"
-                        + "\n".join(figure_notes)
+            if analyze_figures and figure_jobs:
+                # Pass 2: analyze likely graphs/technical figures first.
+                # Stable page/figure ordering is used as a tie breaker.
+                figure_jobs.sort(
+                    key=lambda job: (
+                        -float(job.get("priority_score") or 0.0),
+                        int(job.get("page_number") or 0),
+                        int(job.get("image_index") or 0),
                     )
-
-                pages.append(
-                    {
-                        "page": page_number,
-                        "text": combined,
-                        "document_id": digest,
-                    }
                 )
+                page_notes: dict[int, list[tuple[int, str]]] = {}
 
+                for job in figure_jobs:
+                    page_number = int(job["page_number"])
+                    image_index = int(job["image_index"])
+                    figure_path = Path(str(job["image_path"]))
+                    forced_classification = (
+                        str(job.get("forced_classification") or "").strip()
+                        or None
+                    )
+                    remaining_calls = max(
+                        0,
+                        self.settings.figure_analysis_max_vision_calls
+                        - vision_calls,
+                    )
+
+                    fallback_path = None
+                    if (
+                        remaining_calls > 0
+                        and self.figure_analyzer.source_is_dark(figure_path)
+                    ):
+                        analysis_page = doc[int(job["page_index"])]
+                        fallback_path = self._render_page_image_crop(
+                            analysis_page,
+                            int(job["xref"]),
+                            figure_path,
+                        )
+
+                    print(
+                        f"[PDF Figure 분석] page={page_number} "
+                        f"figure={image_index} "
+                        f"priority={float(job.get('priority_score') or 0.0):.1f} "
+                        f"hint={forced_classification or 'vision_classify'} "
+                        f"remaining_calls={remaining_calls}"
+                    )
+
+                    try:
+                        result = await self.figure_analyzer.analyze_figure(
+                            document_name=display_filename,
+                            document_id=digest,
+                            page_number=page_number,
+                            image_index=image_index,
+                            image_path=figure_path,
+                            fallback_image_path=fallback_path,
+                            remaining_vision_calls=remaining_calls,
+                            forced_classification=forced_classification,
+                        )
+                    except Exception as exc:
+                        print(
+                            f"[PDF Figure 분석 실패] {figure_path.name}: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                        continue
+
+                    vision_calls += result.vision_calls
+                    self._record_figure_result(result)
+                    print(
+                        f"[PDF Figure 결과] {figure_path.name}: "
+                        f"status={result.status}, "
+                        f"type={result.classification}, "
+                        f"vision_calls={result.vision_calls}"
+                    )
+
+                    if result.should_index and result.note_text:
+                        page_notes.setdefault(page_number, []).append(
+                            (image_index, result.note_text)
+                        )
+
+                for page_record in pages:
+                    page_number = int(page_record.get("page") or 0)
+                    notes = sorted(
+                        page_notes.get(page_number, []),
+                        key=lambda item: item[0],
+                    )
+                    if notes:
+                        page_record["text"] = (
+                            str(page_record.get("text") or "")
+                            + "\n\n[Extracted figure notes]\n"
+                            + "\n".join(
+                                f"Figure {image_index}: {note_text}"
+                                for image_index, note_text in notes
+                            )
+                        )
         finally:
             if plumber_pdf is not None:
                 try:
                     plumber_pdf.close()
                 except Exception:
                     pass
-
             doc.close()
 
         print(
             f"[PDF 처리 완료] 추출 이미지 {figure_count}개, "
-            f"새 Vision 호출 {vision_calls}개"
+            f"Vision 호출 {vision_calls}개, "
+            f"valid={self._figure_stats['valid']}, "
+            f"review_required={self._figure_stats['review_required']}, "
+            f"failed={self._figure_stats['failed']}, "
+            f"ignored={self._figure_stats['ignored']}"
         )
         return pages, figure_count
 

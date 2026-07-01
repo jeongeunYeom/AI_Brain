@@ -19,15 +19,19 @@ AGGREGATE_PATTERNS = [
     r"most referenced",
     r"모든 문서",
     r"전체 문서",
+    r"전 문서",
     r"찾은 모든 페이지",
     r"문서별로",
     r"표로 정리",
-    r"전부 찾아줘",
+    r"전부 찾아",
+    r"전체에서 찾아",
 ]
 GRAPH_PATTERNS = [
     r"그래프",
+    r"도표",
     r"그림",
     r"figure",
+    r"chart",
     r"graph",
     r"plot",
     r"x축",
@@ -35,6 +39,7 @@ GRAPH_PATTERNS = [
     r"x-axis",
     r"y-axis",
     r"추세",
+    r"그래프의 의미",
 ]
 OVERVIEW_PATTERNS = [r"목적", r"개요", r"구조", r"목차", r"요약", r"contents", r"table of contents", r"purpose", r"overview"]
 INDEX_PATTERNS = [r"author index", r"subject index", r"master author", r"master subject", r"symbols? standard", r"conversion", r"unit", r"참조되는 페이지", r"등장", r"의미", r"symbol"]

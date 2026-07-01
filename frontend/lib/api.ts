@@ -15,6 +15,23 @@ export type ChatResponse = {
   answer: string;
   sources: Source[];
   query_type?: string | null;
+  model?: string | null;
+  elapsed_seconds?: number | null;
+};
+
+export type ModelAnswer = {
+  model: string;
+  answer: string;
+  elapsed_seconds: number;
+};
+
+export type ChatCompareResponse = {
+  answers: ModelAnswer[];
+  sources: Source[];
+  query_type?: string | null;
+  figures?: unknown[];
+  retrieval_elapsed_seconds: number;
+  shared_context: boolean;
 };
 
 export type SystemCheck = {
@@ -80,11 +97,27 @@ export async function uploadDocument(file: File, analyzeFigures: boolean, jobId?
   return response.json();
 }
 
-export async function askQuestion(question: string): Promise<ChatResponse> {
+export async function askQuestion(
+  question: string,
+  model = "qwen3:8b",
+): Promise<ChatResponse> {
   const response = await fetch(`${API_BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question })
+    body: JSON.stringify({ question, model })
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+export async function askComparison(
+  question: string,
+  models = ["qwen3:8b", "gemma4:latest"],
+): Promise<ChatCompareResponse> {
+  const response = await fetch(`${API_BASE}/chat/compare`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, models })
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json();

@@ -43,6 +43,17 @@ class Settings:
         )
     )
 
+    comparison_models: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            model.strip()
+            for model in os.getenv(
+                "COMPARISON_MODELS",
+                "qwen3:8b,gemma4:latest",
+            ).split(",")
+            if model.strip()
+        )
+    )
+
     vision_model: str = field(
         default_factory=lambda: os.getenv(
             "VISION_MODEL",
@@ -57,11 +68,19 @@ class Settings:
         )
     )
 
+    embedding_model_path: str | None = field(
+        default_factory=lambda: os.getenv("EMBEDDING_MODEL_PATH") or None
+    )
+
     collection_name: str = field(
         default_factory=lambda: os.getenv(
             "CHROMA_COLLECTION",
             "petroleum_knowledge",
         )
+    )
+
+    anonymized_telemetry: bool = field(
+        default_factory=lambda: os.getenv("ANONYMIZED_TELEMETRY", "False").lower() == "true"
     )
 
     chunk_size: int = field(
@@ -100,6 +119,64 @@ class Settings:
         )
     )
 
+    aggregate_batch_size: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGGREGATE_BATCH_SIZE", "500")
+        )
+    )
+
+    aggregate_max_results: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGGREGATE_MAX_RESULTS", "100")
+        )
+    )
+
+    aggregate_max_per_document: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGGREGATE_MAX_PER_DOCUMENT", "10")
+        )
+    )
+
+    aggregate_context_max_chunks: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGGREGATE_CONTEXT_MAX_CHUNKS", "24")
+        )
+    )
+
+    aggregate_context_max_characters: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGGREGATE_CONTEXT_MAX_CHARACTERS", "24000")
+        )
+    )
+
+    figure_note_min_confidence: float = field(
+        default_factory=lambda: float(
+            os.getenv("FIGURE_NOTE_MIN_CONFIDENCE", "0.5")
+        )
+    )
+
+    allow_legacy_figure_notes: bool = field(
+        default_factory=lambda: os.getenv("ALLOW_LEGACY_FIGURE_NOTES", "0") == "1"
+    )
+
+    figure_analysis_max_vision_calls: int = field(
+        default_factory=lambda: int(
+            os.getenv("FIGURE_ANALYSIS_MAX_VISION_CALLS", "80")
+        )
+    )
+
+    figure_page_render_fallback: bool = field(
+        default_factory=lambda: os.getenv(
+            "FIGURE_PAGE_RENDER_FALLBACK", "1"
+        ) == "1"
+    )
+
+    figure_page_render_scale: float = field(
+        default_factory=lambda: float(
+            os.getenv("FIGURE_PAGE_RENDER_SCALE", "3.0")
+        )
+    )
+
     @property
     def raw_dir(self) -> Path:
         return self.data_dir / "raw"
@@ -117,12 +194,28 @@ class Settings:
         return self.data_dir / "figure_notes"
 
     @property
+    def figure_candidates_dir(self) -> Path:
+        return self.data_dir / "figure_candidates"
+
+    @property
+    def figure_analysis_inputs_dir(self) -> Path:
+        return self.data_dir / "figure_analysis_inputs"
+
+    @property
     def vector_db_dir(self) -> Path:
         return self.data_dir / "vector_db"
 
     @property
     def metadata_dir(self) -> Path:
         return self.data_dir / "metadata"
+
+    @property
+    def evaluation_dir(self) -> Path:
+        return self.data_dir / "evaluation"
+    
+    @property
+    def agent_runs_dir(self) -> Path:
+        return self.data_dir / "agent_runs"
 
 
 @lru_cache(maxsize=1)
@@ -134,8 +227,12 @@ def get_settings() -> Settings:
         settings.extracted_dir,
         settings.figures_dir,
         settings.figure_notes_dir,
+        settings.figure_candidates_dir,
+        settings.figure_analysis_inputs_dir,
         settings.vector_db_dir,
         settings.metadata_dir,
+        settings.evaluation_dir,
+        settings.agent_runs_dir,
     ]:
         directory.mkdir(
             parents=True,

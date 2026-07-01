@@ -1,0 +1,295 @@
+[
+  {
+    "id": "WT-001",
+    "category": "flow_regime",
+    "question": "Wellbore storage와 radial flow를 pressure derivative로 구분해줘.",
+    "required_concepts": [
+      "wellbore storage에서 pressure와 derivative가 겹침",
+      "unit-slope diagonal",
+      "radial flow에서 derivative plateau"
+    ],
+    "forbidden_claims": [
+      "radial flow에서 pressure와 derivative가 unit-slope로 겹친다",
+      "radial flow에서 pressure가 unit-slope를 따른다"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      219
+    ]
+  },
+  {
+    "id": "WT-002",
+    "category": "false_premise",
+    "question": "다음 설명이 맞는지 검토해줘. 'Radial flow 구간에서는 pressure와 pressure derivative가 모두 unit-slope 직선을 따라 겹친다.'",
+    "required_concepts": [
+      "설명이 틀렸다고 명시",
+      "unit-slope overlap은 wellbore storage 특징",
+      "radial flow에서는 derivative plateau"
+    ],
+    "forbidden_claims": [
+      "radial flow에서 pressure가 unit-slope를 따른다",
+      "원래 문장이 부분적으로 맞다"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      219
+    ]
+  },
+  {
+    "id": "WT-003",
+    "category": "unit_slope",
+    "question": "Log-log diagnostic plot에서 unit-slope diagonal은 어떤 유동 구간을 의미하는지 설명해줘.",
+    "required_concepts": [
+      "early-time wellbore storage dominated flow",
+      "pressure와 derivative가 겹침"
+    ],
+    "forbidden_claims": [
+      "unit-slope diagonal은 radial flow를 의미한다"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      219
+    ]
+  },
+  {
+    "id": "WT-004",
+    "category": "derivative_plateau",
+    "question": "Pressure derivative plateau가 나타내는 유동 구간과 그 의미를 문서 근거로 설명해줘.",
+    "required_concepts": [
+      "middle-time region",
+      "radial flow",
+      "derivative가 일정하거나 수평"
+    ],
+    "forbidden_claims": [
+      "derivative plateau는 wellbore storage를 의미한다"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      219
+    ]
+  },
+  {
+    "id": "WT-005",
+    "category": "plot_type",
+    "question": "Radial flow를 log-log plot과 semilog plot에서 각각 어떻게 식별하는지 구분해서 설명해줘.",
+    "required_concepts": [
+      "log-log에서는 derivative plateau",
+      "semilog에서는 pressure straight line 또는 characteristic slope",
+      "두 좌표계 특징을 혼합하지 않음"
+    ],
+    "forbidden_claims": [
+      "log-log radial flow에서 pressure가 unit-slope 직선을 따른다"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      219,
+      286
+    ]
+  },
+  {
+    "id": "WT-006",
+    "category": "curve_shape",
+    "question": "Early-time wellbore storage와 middle-time radial flow에서 pressure 및 pressure derivative 곡선의 모양을 각각 설명해줘.",
+    "required_concepts": [
+      "early-time pressure와 derivative overlap",
+      "unit-slope",
+      "middle-time derivative plateau"
+    ],
+    "forbidden_claims": [
+      "middle-time pressure가 log-log에서 unit-slope를 따른다"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      219
+    ]
+  },
+  {
+    "id": "WT-007",
+    "category": "rft_comparison",
+    "question": "Appraisal Well RFT Survey와 RFT Survey after Significant Production의 압력-심도 분포를 비교해줘.",
+    "required_concepts": [
+      "appraisal survey의 0.34 psi/ft",
+      "production 이후 0.29, 0.37, 0.42 psi/ft",
+      "생산 후 여러 압력 구배 구간 또는 압력 불연속"
+    ],
+    "forbidden_claims": [
+      "Appraisal Figure 2에 0.29, 0.37, 0.42 psi/ft 세 구간이 있다"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      439,
+      440
+    ]
+  },
+  {
+    "id": "WT-008",
+    "category": "numeric_extraction",
+    "question": "RFT Survey after Significant Production 그래프에 표시된 pressure gradient를 단위와 함께 모두 알려줘.",
+    "required_concepts": [
+      "0.29 psi/ft",
+      "0.37 psi/ft",
+      "0.42 psi/ft"
+    ],
+    "forbidden_claims": [
+      "문서에 없는 추가 gradient",
+      "단위를 psi/m로 변경"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      440
+    ]
+  },
+  {
+    "id": "WT-009",
+    "category": "figure_mixing",
+    "question": "Figure 2와 Figure 3의 RFT 정보를 서로 섞지 말고 각각 따로 정리해줘.",
+    "required_concepts": [
+      "Figure 2 appraisal survey",
+      "Figure 3 after significant production",
+      "각 Figure의 gradient를 분리"
+    ],
+    "forbidden_claims": [
+      "Figure 2에 세 개의 생산 후 gradient를 배치",
+      "Figure 3에 0.34 psi/ft만 배치"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      439,
+      440
+    ]
+  },
+  {
+    "id": "WT-010",
+    "category": "rft_supercharging",
+    "question": "RFT 그래프에서 supercharged points가 어떻게 표시되거나 처리되었는지 문서에 직접 나타난 내용만 설명해줘.",
+    "required_concepts": [
+      "supercharged points 식별 또는 제외",
+      "직접 나타난 정보만 사용"
+    ],
+    "forbidden_claims": [
+      "문서에 없는 장비 고장 원인",
+      "문서에 없는 보정 공식"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      439,
+      440,
+      441
+    ]
+  },
+  {
+    "id": "WT-011",
+    "category": "refusal",
+    "question": "업로드한 문서에서 북해 Johansen Formation의 CO2 주입률과 residual CO2 saturation 값을 찾아 설명해줘.",
+    "required_concepts": [
+      "문서 근거로 확인할 수 없다고 거절"
+    ],
+    "forbidden_claims": [
+      "1.4e4 m3/day",
+      "residual CO2 saturation 0.2",
+      "일반 지식으로 Johansen 수치를 제공"
+    ],
+    "expected_behavior": "refuse",
+    "expected_document": null,
+    "preferred_pages": []
+  },
+  {
+    "id": "WT-012",
+    "category": "refusal",
+    "question": "현재 업로드된 Well Test Analysis 문서에서 대한민국 동해 가스전의 2026년 생산량을 알려줘.",
+    "required_concepts": [
+      "문서 근거로 확인할 수 없다고 거절"
+    ],
+    "forbidden_claims": [
+      "구체적인 2026년 생산량 수치"
+    ],
+    "expected_behavior": "refuse",
+    "expected_document": null,
+    "preferred_pages": []
+  },
+  {
+    "id": "WT-013",
+    "category": "partial_evidence",
+    "question": "Wellbore storage, radial flow, fracture flow의 pressure derivative 특징을 모두 설명해줘. 문서에서 확인되지 않는 항목은 그 항목만 확인할 수 없다고 표시해줘.",
+    "required_concepts": [
+      "wellbore storage unit-slope overlap",
+      "radial flow derivative plateau",
+      "근거 없는 항목만 별도 표시"
+    ],
+    "forbidden_claims": [
+      "일부 근거가 있는데 전체 질문을 거절",
+      "fracture flow를 근거 없이 단정"
+    ],
+    "expected_behavior": "partial_answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      219
+    ]
+  },
+  {
+    "id": "WT-014",
+    "category": "citation",
+    "question": "Wellbore storage와 radial flow 구분을 설명하고 사용한 문서명과 페이지를 표시해줘.",
+    "required_concepts": [
+      "wellbore storage unit-slope overlap",
+      "radial flow derivative plateau",
+      "문서명과 p.219 인용"
+    ],
+    "forbidden_claims": [
+      "근거 페이지 없이 일반 지식만 설명"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      219
+    ]
+  },
+  {
+    "id": "WT-015",
+    "category": "mtr",
+    "question": "Middle-time region의 시작을 pressure derivative로 어떻게 판별하는지 설명해줘.",
+    "required_concepts": [
+      "derivative가 일정해짐",
+      "derivative plateau",
+      "radial flow와 연결"
+    ],
+    "forbidden_claims": [
+      "MTR 시작은 pressure와 derivative의 unit-slope overlap"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      219
+    ]
+  },
+  {
+    "id": "WT-016",
+    "category": "figure_semantics",
+    "question": "Type curve Figure에서 x축, y축, pressure 계열, pressure derivative 계열을 서로 구분해서 설명해줘. 축을 데이터 계열로 부르지 마.",
+    "required_concepts": [
+      "축과 데이터 계열을 구분",
+      "pressure와 pressure derivative를 별도 계열로 설명"
+    ],
+    "forbidden_claims": [
+      "x축 또는 y축을 pressure series라고 설명"
+    ],
+    "expected_behavior": "answer",
+    "expected_document": "Heriot-Watt_University_-_Well_Test_Analysis.pdf",
+    "preferred_pages": [
+      219,
+      261,
+      262,
+      263
+    ]
+  }
+]

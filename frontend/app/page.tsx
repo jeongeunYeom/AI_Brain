@@ -1,17 +1,123 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { analyzeImage, askQuestion, ChatResponse, createUploadJob, getUploadJob, uploadDocument, UploadJob } from "@/lib/api";
+import {
+  analyzeImage,
+  askComparison,
+  askQuestion,
+  ChatCompareResponse,
+  ChatResponse,
+  createUploadJob,
+  getUploadJob,
+  uploadDocument,
+  UploadJob,
+} from "@/lib/api";
 import { DocumentInfoPanel } from "@/components/DocumentInfoPanel";
 import { PlotPanel } from "@/components/PlotPanel";
 import { SystemStatusPanel } from "@/components/SystemStatusPanel";
 import { MarkdownMath } from "@/components/MarkdownMath";
 
+
+type FigureReference = {
+  document: string;
+  page?: number | null;
+  title?: string | null;
+  image_type?: string | null;
+  filename: string;
+  url: string;
+  preview_url?: string | null;
+};
+
+type ChatResponseWithFigures = ChatResponse & {
+  figures?: FigureReference[];
+};
+
+type ChatCompareResponseWithFigures = Omit<
+  ChatCompareResponse,
+  "figures"
+> & {
+  figures?: FigureReference[];
+};
+
+type AnswerMode =
+  | "qwen3:8b"
+  | "gemma4:latest"
+  | "compare";
+
+
+const API_BASE_URL = (
+  process.env.NEXT_PUBLIC_API_URL ??
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  "http://127.0.0.1:8000/api"
+).replace(/\/$/, "");
+
+function resolveFigureUrl(value: string): string {
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+
+  if (value.startsWith("/api/")) {
+    return `${API_BASE_URL.replace(/\/api$/, "")}${value}`;
+  }
+
+  return `${API_BASE_URL}/${value.replace(/^\//, "")}`;
+}
+
+function FigureImage({
+  figure,
+  className,
+  loading,
+}: {
+  figure: FigureReference;
+  className: string;
+  loading?: "eager" | "lazy";
+}) {
+  const originalUrl = resolveFigureUrl(figure.url);
+  const previewUrl = figure.preview_url
+    ? resolveFigureUrl(figure.preview_url)
+    : null;
+  const [source, setSource] = useState(previewUrl ?? originalUrl);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setSource(previewUrl ?? originalUrl);
+    setFailed(false);
+  }, [originalUrl, previewUrl]);
+
+  if (failed) {
+    return (
+      <span className="text-xs font-medium text-slate-400">
+        Image unavailable
+      </span>
+    );
+  }
+
+  return (
+    <img
+      src={source}
+      alt={
+        figure.title ??
+        `${figure.document} p.${figure.page ?? "?"} figure`
+      }
+      loading={loading}
+      className={className}
+      onError={() => {
+        if (previewUrl && source !== originalUrl) {
+          setSource(originalUrl);
+          return;
+        }
+        setFailed(true);
+      }}
+    />
+  );
+}
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
-  response?: ChatResponse;
+  response?: ChatResponseWithFigures;
+  comparison?: ChatCompareResponseWithFigures;
 };
 
 type SavedChat = {
@@ -80,6 +186,23 @@ export default function Home() {
   const [uploadJob, setUploadJob] = useState<UploadJob | null>(null);
   const [expandedSource, setExpandedSource] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(300);
+  const [selectedFigure, setSelectedFigure] = useState<FigureReference | null>(null);
+  const [answerMode, setAnswerMode] = useState<AnswerMode>("qwen3:8b");
+
+  useEffect(() => {
+    if (!selectedFigure) {
+      return;
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSelectedFigure(null);
+      }
+    }
+
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [selectedFigure]);
 
 
   useEffect(() => {
@@ -170,6 +293,7 @@ export default function Home() {
     setStatus(null);
     setExpandedSource(null);
     setVision(null);
+    setSelectedFigure(null);
   }
 
   function openSavedChat(chat: SavedChat) {
@@ -179,6 +303,7 @@ export default function Home() {
     setStatus(null);
     setExpandedSource(null);
     setVision(null);
+    setSelectedFigure(null);
   }
 
   function deleteSavedChat(chatId: string) {
@@ -292,22 +417,51 @@ export default function Home() {
     setMessages((previous) => [...previous, userMessage]);
     setQuestion("");
     setBusy(true);
-    setStatus("Searching vector database and asking Qwen3...");
+    setStatus(
+      answerMode === "compare"
+        ? "한 번 검색한 동일 근거로 Qwen3와 Gemma4를 순차 비교 중..."
+        : `검색 후 ${answerMode}에 질문 중...`,
+    );
 
     try {
-      const result = await askQuestion(submittedQuestion);
+      let assistantMessage: ChatMessage;
+      let sourceCount = 0;
 
-      const assistantMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: result.answer,
-        response: result,
-      };
+      if (answerMode === "compare") {
+        const result = (await askComparison(
+          submittedQuestion,
+          ["qwen3:8b", "gemma4:latest"],
+        )) as ChatCompareResponseWithFigures;
 
-      setMessages((previous) => [...previous, assistantMessage]);
+        sourceCount = result.sources?.length ?? 0;
+        assistantMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "",
+          comparison: result,
+        };
+      } else {
+        const result = (await askQuestion(
+          submittedQuestion,
+          answerMode,
+        )) as ChatResponseWithFigures;
+
+        sourceCount = result.sources?.length ?? 0;
+        assistantMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: result.answer,
+          response: result,
+        };
+      }
+
+      setMessages((previous) => [
+        ...previous,
+        assistantMessage,
+      ]);
       setStatus(
-        result.sources?.length
-          ? "Answer generated from retrieved sources."
+        sourceCount
+          ? "동일한 검색 근거를 사용해 답변을 생성했습니다."
           : "관련 문서 청크를 찾지 못했습니다.",
       );
     } catch (err) {
@@ -543,7 +697,25 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-2 text-slate-500">
-            <span className="rounded-full border border-slate-200 px-3 py-1 text-xs">Qwen3 8B</span>
+            <a
+              href="/review"
+              className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+            >
+              Figure review
+            </a>
+            <select
+              value={answerMode}
+              onChange={(event) =>
+                setAnswerMode(event.target.value as AnswerMode)
+              }
+              disabled={busy}
+              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 outline-none disabled:opacity-50"
+              aria-label="답변 모델 선택"
+            >
+              <option value="qwen3:8b">Qwen3 8B</option>
+              <option value="gemma4:latest">Gemma4</option>
+              <option value="compare">Qwen3 vs Gemma4</option>
+            </select>
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100">☾</span>
           </div>
         </header>
@@ -577,8 +749,10 @@ export default function Home() {
                 );
               }
 
-              const response = message.response;
+              const comparison = message.comparison;
+              const response = message.response ?? comparison;
               const sourceCount = response?.sources?.length ?? 0;
+              const figures = response?.figures ?? [];
 
               return (
                 <div key={message.id} className="flex gap-3">
@@ -586,8 +760,103 @@ export default function Home() {
                     AI
                   </div>
 
-                  <div className="max-w-[86%] rounded-3xl rounded-tl-md bg-white px-5 py-4 text-sm leading-7 text-slate-700 shadow-sm ring-1 ring-slate-200">
-                    <MarkdownMath content={message.content} />
+                  <div
+                    className={`${
+                      comparison ? "w-full max-w-none" : "max-w-[86%]"
+                    } rounded-3xl rounded-tl-md bg-white px-5 py-4 text-sm leading-7 text-slate-700 shadow-sm ring-1 ring-slate-200`}
+                  >
+                    {comparison ? (
+                      <>
+                        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                          <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
+                            동일 검색 근거
+                          </span>
+                          <span>
+                            retrieval{" "}
+                            {comparison.retrieval_elapsed_seconds.toFixed(2)}s
+                          </span>
+                          <span>
+                            모델은 RTX 3090 안정성을 위해 순차 실행
+                          </span>
+                        </div>
+
+                        <div className="grid gap-4 lg:grid-cols-2">
+                          {comparison.answers.map((item) => (
+                            <section
+                              key={`${message.id}:${item.model}`}
+                              className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                            >
+                              <div className="mb-3 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                                <h3 className="font-bold text-slate-900">
+                                  {item.model}
+                                </h3>
+                                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-500 ring-1 ring-slate-200">
+                                  {item.elapsed_seconds.toFixed(2)}s
+                                </span>
+                              </div>
+                              <MarkdownMath content={item.answer} />
+                            </section>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {message.response?.model && (
+                          <div className="mb-3 flex items-center gap-2 text-xs text-slate-500">
+                            <span className="rounded-full bg-indigo-50 px-3 py-1 font-semibold text-indigo-700">
+                              {message.response.model}
+                            </span>
+                            {message.response.elapsed_seconds != null && (
+                              <span>
+                                {message.response.elapsed_seconds.toFixed(2)}s
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        <MarkdownMath content={message.content} />
+                      </>
+                    )}
+
+
+                    {figures.length > 0 && (
+                      <div className="mt-5 border-t border-slate-100 pt-4">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                          Related figures
+                        </h3>
+
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          {figures.map((figure) => (
+                            <button
+                              key={`${message.id}:${figure.filename}`}
+                              type="button"
+                              onClick={() => setSelectedFigure(figure)}
+                              className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 text-left transition hover:border-indigo-300 hover:shadow-md"
+                            >
+                              <div className="flex h-48 items-center justify-center bg-white p-2">
+                                <FigureImage
+                                  figure={figure}
+                                  loading="lazy"
+                                  className="max-h-full max-w-full object-contain"
+                                />
+                              </div>
+
+                              <div className="border-t border-slate-200 px-3 py-2">
+                                <p className="truncate text-xs font-semibold text-slate-800">
+                                  {figure.title ?? "Retrieved figure"}
+                                </p>
+                                <p className="mt-1 truncate text-[11px] text-slate-500">
+                                  {figure.document}
+                                  {figure.page ? ` · p.${figure.page}` : ""}
+                                  {figure.image_type
+                                    ? ` · ${figure.image_type}`
+                                    : ""}
+                                </p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {sourceCount > 0 && (
                       <div className="mt-5 border-t border-slate-100 pt-4">
@@ -717,6 +986,64 @@ export default function Home() {
           <p className="mt-2 text-center text-[11px] text-slate-400">AI_Brain can make mistakes. Check retrieved sources and page numbers.</p>
         </form>
       </section>
+
+
+      {selectedFigure && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={selectedFigure.title ?? "Retrieved figure"}
+          onClick={() => setSelectedFigure(null)}
+        >
+          <div
+            className="relative flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label="Close figure"
+              onClick={() => setSelectedFigure(null)}
+              className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-slate-900/75 text-xl text-white hover:bg-slate-900"
+            >
+              ×
+            </button>
+
+            <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-slate-100 p-4">
+              <FigureImage
+                figure={selectedFigure}
+                loading="eager"
+                className="max-h-[78vh] max-w-full object-contain"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border-t border-slate-200 px-5 py-4">
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-slate-900">
+                  {selectedFigure.title ?? "Retrieved figure"}
+                </p>
+                <p className="mt-1 truncate text-sm text-slate-500">
+                  {selectedFigure.document}
+                  {selectedFigure.page
+                    ? ` · p.${selectedFigure.page}`
+                    : ""}
+                  {selectedFigure.image_type
+                    ? ` · ${selectedFigure.image_type}`
+                    : ""}
+                </p>
+              </div>
+              <a
+                href={resolveFigureUrl(selectedFigure.url)}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 text-sm font-semibold text-indigo-600 hover:text-indigo-700"
+              >
+                View original
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

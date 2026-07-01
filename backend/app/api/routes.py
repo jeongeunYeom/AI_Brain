@@ -3,13 +3,26 @@ from functools import lru_cache
 import json
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 
 from app.core.config import Settings, get_settings
 from app.core.error_mapping import ExternalServiceError
 from app.core.errors import to_http_exception
-from app.models.schemas import ChatRequest, ChatResponse, PlotRequest, PlotResponse, UploadResponse, VisionResponse
+from app.models.schemas import (
+    ChatCompareRequest,
+    ChatCompareResponse,
+    ChatRequest,
+    ChatResponse,
+    FigureReviewUpdateRequest,
+    FigureRotationUpdateRequest,
+    PlotRequest,
+    PlotResponse,
+    UploadResponse,
+    VisionResponse,
+)
 from app.services.document_processor import DocumentProcessor
 from app.services.jobs import create_job, get_job, update_job
+from app.services.figure_review import FigureReviewError, FigureReviewService
 from app.services.ollama import OllamaClient
 from app.services.plots import build_plot
 from app.services.qa import QAService
@@ -113,6 +126,46 @@ async def list_documents(settings: Settings = Depends(get_settings)) -> list[dic
     return records
 
 
+def _allowed_answer_models(settings: Settings) -> list[str]:
+    return list(
+        dict.fromkeys(
+            [
+                settings.text_model,
+                *settings.comparison_models,
+            ]
+        )
+    )
+
+
+def _validate_answer_models(
+    settings: Settings,
+    models: list[str],
+) -> list[str]:
+    allowed = _allowed_answer_models(settings)
+    normalized = list(
+        dict.fromkeys(
+            str(model or "").strip()
+            for model in models
+            if str(model or "").strip()
+        )
+    )
+    unsupported = [
+        model
+        for model in normalized
+        if model not in allowed
+    ]
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Unsupported answer model.",
+                "unsupported": unsupported,
+                "allowed": allowed,
+            },
+        )
+    return normalized
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
@@ -120,9 +173,69 @@ async def chat(
     ollama: OllamaClient = Depends(get_ollama),
     vector_store: VectorStore = Depends(get_vector_store),
 ) -> ChatResponse:
+    selected_model = request.model or settings.text_model
+    _validate_answer_models(settings, [selected_model])
     service = QAService(settings, vector_store, ollama)
     try:
-        return await service.answer(request.question, request.top_k)
+        return await service.answer(
+            request.question,
+            request.top_k,
+            model=selected_model,
+        )
+    except ExternalServiceError as exc:
+        raise to_http_exception(exc) from exc
+
+
+@router.post(
+    "/chat/compare",
+    response_model=ChatCompareResponse,
+)
+async def compare_chat_models(
+    request: ChatCompareRequest,
+    settings: Settings = Depends(get_settings),
+    ollama: OllamaClient = Depends(get_ollama),
+    vector_store: VectorStore = Depends(get_vector_store),
+) -> ChatCompareResponse:
+    requested_models = (
+        request.models
+        if request.models is not None
+        else list(settings.comparison_models)
+    )
+    selected_models = _validate_answer_models(
+        settings,
+        requested_models,
+    )
+    if len(selected_models) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Comparison requires at least two "
+                "configured answer models."
+            ),
+        )
+
+    installed = set(await ollama.list_models())
+    missing = [
+        model
+        for model in selected_models
+        if model not in installed
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Comparison model is not installed in Ollama.",
+                "missing": missing,
+            },
+        )
+
+    service = QAService(settings, vector_store, ollama)
+    try:
+        return await service.compare(
+            request.question,
+            selected_models,
+            request.top_k,
+        )
     except ExternalServiceError as exc:
         raise to_http_exception(exc) from exc
 
@@ -150,3 +263,127 @@ async def analyze_image(
 @router.post("/plots", response_model=PlotResponse)
 async def create_plot(request: PlotRequest) -> PlotResponse:
     return PlotResponse(figure=build_plot(request))
+
+def _review_service(settings: Settings) -> FigureReviewService:
+    return FigureReviewService(settings)
+
+
+def _review_http_error(exc: FigureReviewError) -> HTTPException:
+    message = str(exc)
+    status_code = 404 if "not found" in message.lower() else 400
+    return HTTPException(status_code=status_code, detail=message)
+
+
+@router.get("/review/summary")
+async def figure_review_summary(
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    return _review_service(settings).summary()
+
+
+@router.get("/review/candidates")
+async def figure_review_candidates(
+    document_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    page: int | None = Query(default=None, ge=1),
+    q: str | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    try:
+        return _review_service(settings).list_candidates(
+            document_id=document_id,
+            status=status,
+            page=page,
+            query=q,
+            offset=offset,
+            limit=limit,
+        )
+    except FigureReviewError as exc:
+        raise _review_http_error(exc) from exc
+
+
+@router.get("/review/candidates/{candidate_id}")
+async def figure_review_candidate(
+    candidate_id: str,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    try:
+        return _review_service(settings).get_candidate(candidate_id)
+    except FigureReviewError as exc:
+        raise _review_http_error(exc) from exc
+
+
+@router.patch("/review/candidates/{candidate_id}")
+async def update_figure_review_candidate(
+    candidate_id: str,
+    request: FigureReviewUpdateRequest,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    try:
+        return _review_service(settings).update_candidate(
+            candidate_id,
+            request.model_dump(exclude_unset=True),
+        )
+    except FigureReviewError as exc:
+        raise _review_http_error(exc) from exc
+
+
+@router.post("/review/candidates/{candidate_id}/rotation")
+async def update_figure_review_rotation(
+    candidate_id: str,
+    request: FigureRotationUpdateRequest,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    try:
+        return _review_service(settings).set_rotation(
+            candidate_id,
+            rotation=request.rotation,
+            pdf_crop_rotation=request.pdf_crop_rotation,
+            enhance=request.enhance,
+            regenerate=request.regenerate,
+        )
+    except FigureReviewError as exc:
+        raise _review_http_error(exc) from exc
+
+
+@router.post("/review/candidates/{candidate_id}/preview")
+async def regenerate_figure_review_preview(
+    candidate_id: str,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    try:
+        return _review_service(settings).regenerate_preview(candidate_id)
+    except FigureReviewError as exc:
+        raise _review_http_error(exc) from exc
+
+
+@router.get(
+    "/review/candidates/{candidate_id}/preview-image",
+    include_in_schema=False,
+)
+async def figure_review_preview_image(
+    candidate_id: str,
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    try:
+        result = _review_service(settings).preview_file(candidate_id)
+    except FigureReviewError as exc:
+        raise _review_http_error(exc) from exc
+
+    return FileResponse(
+        path=result.path,
+        media_type="image/png",
+        filename=result.path.name,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/review/audit")
+async def figure_review_audit(
+    limit: int = Query(default=100, ge=1, le=500),
+    settings: Settings = Depends(get_settings),
+) -> list[dict]:
+    return _review_service(settings).recent_audit(limit)
+
