@@ -212,6 +212,10 @@ class Settings:
     @property
     def evaluation_dir(self) -> Path:
         return self.data_dir / "evaluation"
+    
+    @property
+    def agent_runs_dir(self) -> Path:
+        return self.data_dir / "agent_runs"
 
 
 @lru_cache(maxsize=1)
@@ -228,6 +232,7 @@ def get_settings() -> Settings:
         settings.vector_db_dir,
         settings.metadata_dir,
         settings.evaluation_dir,
+        settings.agent_runs_dir,
     ]:
         directory.mkdir(
             parents=True,
