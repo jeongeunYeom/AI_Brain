@@ -36,6 +36,19 @@ class FigureReference(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1)
     top_k: int | None = None
+    model: str | None = None
+
+
+class ChatCompareRequest(BaseModel):
+    question: str = Field(min_length=1)
+    top_k: int | None = None
+    models: list[str] | None = None
+
+
+class ModelAnswer(BaseModel):
+    model: str
+    answer: str
+    elapsed_seconds: float
 
 
 class ChatResponse(BaseModel):
@@ -43,6 +56,17 @@ class ChatResponse(BaseModel):
     sources: list[Source]
     query_type: str | None = None
     figures: list[FigureReference] = Field(default_factory=list)
+    model: str | None = None
+    elapsed_seconds: float | None = None
+
+
+class ChatCompareResponse(BaseModel):
+    answers: list[ModelAnswer]
+    sources: list[Source]
+    query_type: str | None = None
+    figures: list[FigureReference] = Field(default_factory=list)
+    retrieval_elapsed_seconds: float = 0.0
+    shared_context: bool = True
 
 
 class DocumentRecord(BaseModel):

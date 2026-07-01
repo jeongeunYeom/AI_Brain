@@ -43,6 +43,17 @@ class Settings:
         )
     )
 
+    comparison_models: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            model.strip()
+            for model in os.getenv(
+                "COMPARISON_MODELS",
+                "qwen3:8b,gemma4:latest",
+            ).split(",")
+            if model.strip()
+        )
+    )
+
     vision_model: str = field(
         default_factory=lambda: os.getenv(
             "VISION_MODEL",

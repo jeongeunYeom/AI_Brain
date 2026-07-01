@@ -1,9 +1,16 @@
 import re
+import time
 from pathlib import Path
 from urllib.parse import quote
 
 from app.core.config import Settings
-from app.models.schemas import ChatResponse, FigureReference, Source
+from app.models.schemas import (
+    ChatCompareResponse,
+    ChatResponse,
+    FigureReference,
+    ModelAnswer,
+    Source,
+)
 from app.services.ollama import OllamaClient
 from app.services.figure_preview import FigurePreviewService
 from app.services.query_router import QueryType, classify_query
@@ -119,10 +126,176 @@ class QAService:
             data_dir / "figure_display_overrides.json",
         )
 
-    async def answer(self, question: str, top_k: int | None = None) -> ChatResponse:
+    async def answer(
+        self,
+        question: str,
+        top_k: int | None = None,
+        model: str | None = None,
+    ) -> ChatResponse:
+        selected_model = model or self.settings.text_model
+        prepared = self._prepare_generation(question, top_k)
+
+        aggregate = prepared.get("aggregate")
+        if aggregate is not None:
+            return ChatResponse(
+                answer=aggregate.answer,
+                sources=aggregate.sources,
+                query_type=aggregate.query_type,
+                figures=aggregate.figures,
+                model=selected_model,
+                elapsed_seconds=0.0,
+            )
+
+        if not prepared["hits"]:
+            return ChatResponse(
+                answer=STRICT_REFUSAL,
+                sources=[],
+                query_type=prepared["query_type"].value,
+                figures=[],
+                model=selected_model,
+                elapsed_seconds=0.0,
+            )
+
+        started = time.perf_counter()
+        answer = await self.ollama.chat(
+            prepared["messages"],
+            model=selected_model,
+        )
+        elapsed = time.perf_counter() - started
+
+        if str(answer or "").strip().startswith(STRICT_REFUSAL):
+            partial_answer = self._supported_partial_answer(
+                question,
+                prepared["hits"],
+            )
+            if partial_answer:
+                answer = partial_answer
+
+        return ChatResponse(
+            answer=answer,
+            sources=prepared["sources"],
+            query_type=prepared["query_type"].value,
+            figures=prepared["figures"],
+            model=selected_model,
+            elapsed_seconds=elapsed,
+        )
+
+    async def compare(
+        self,
+        question: str,
+        models: list[str],
+        top_k: int | None = None,
+    ) -> ChatCompareResponse:
+        selected_models: list[str] = []
+        for model in models:
+            normalized = str(model or "").strip()
+            if normalized and normalized not in selected_models:
+                selected_models.append(normalized)
+
+        if not selected_models:
+            selected_models = [self.settings.text_model]
+
+        prepared = self._prepare_generation(question, top_k)
+        aggregate = prepared.get("aggregate")
+
+        if aggregate is not None:
+            return ChatCompareResponse(
+                answers=[
+                    ModelAnswer(
+                        model=model,
+                        answer=aggregate.answer,
+                        elapsed_seconds=0.0,
+                    )
+                    for model in selected_models
+                ],
+                sources=aggregate.sources,
+                query_type=aggregate.query_type,
+                figures=aggregate.figures,
+                retrieval_elapsed_seconds=prepared[
+                    "retrieval_elapsed_seconds"
+                ],
+                shared_context=True,
+            )
+
+        if not prepared["hits"]:
+            return ChatCompareResponse(
+                answers=[
+                    ModelAnswer(
+                        model=model,
+                        answer=STRICT_REFUSAL,
+                        elapsed_seconds=0.0,
+                    )
+                    for model in selected_models
+                ],
+                sources=[],
+                query_type=prepared["query_type"].value,
+                figures=[],
+                retrieval_elapsed_seconds=prepared[
+                    "retrieval_elapsed_seconds"
+                ],
+                shared_context=True,
+            )
+
+        answers: list[ModelAnswer] = []
+        for model in selected_models:
+            started = time.perf_counter()
+            answer = await self.ollama.chat(
+                prepared["messages"],
+                model=model,
+            )
+            elapsed = time.perf_counter() - started
+
+            if str(answer or "").strip().startswith(STRICT_REFUSAL):
+                partial_answer = self._supported_partial_answer(
+                    question,
+                    prepared["hits"],
+                )
+                if partial_answer:
+                    answer = partial_answer
+
+            answers.append(
+                ModelAnswer(
+                    model=model,
+                    answer=answer,
+                    elapsed_seconds=elapsed,
+                )
+            )
+
+        return ChatCompareResponse(
+            answers=answers,
+            sources=prepared["sources"],
+            query_type=prepared["query_type"].value,
+            figures=prepared["figures"],
+            retrieval_elapsed_seconds=prepared[
+                "retrieval_elapsed_seconds"
+            ],
+            shared_context=True,
+        )
+
+    def _prepare_generation(
+        self,
+        question: str,
+        top_k: int | None,
+    ) -> dict:
         query_type = classify_query(question)
+        retrieval_started = time.perf_counter()
+
         if query_type == QueryType.AGGREGATE_ANALYSIS:
-            return self._aggregate_response(question, query_type)
+            aggregate = self._aggregate_response(
+                question,
+                query_type,
+            )
+            return {
+                "aggregate": aggregate,
+                "query_type": query_type,
+                "hits": [],
+                "sources": aggregate.sources,
+                "figures": aggregate.figures,
+                "messages": [],
+                "retrieval_elapsed_seconds": (
+                    time.perf_counter() - retrieval_started
+                ),
+            }
 
         search_question = self._build_search_question(question)
         hits = self._retrieve(
@@ -131,63 +304,93 @@ class QAService:
             top_k or self.settings.top_k,
             original_question=question,
         )
+
         if not hits:
-            return ChatResponse(
-                answer=STRICT_REFUSAL,
-                sources=[],
-                query_type=query_type.value,
-            )
+            return {
+                "aggregate": None,
+                "query_type": query_type,
+                "hits": [],
+                "sources": [],
+                "figures": [],
+                "messages": [],
+                "retrieval_elapsed_seconds": (
+                    time.perf_counter() - retrieval_started
+                ),
+            }
 
         context_blocks = []
         sources = []
         for hit in hits:
             metadata = hit["metadata"]
             score = float(hit.get("score") or 0.0)
-            document_name = clean_document_name(metadata.get("document"))
+            document_name = clean_document_name(
+                metadata.get("document")
+            )
             page_number = metadata.get("page")
 
             context_blocks.append(
                 f"Source: {document_name} p.{page_number} "
-                f"chunk {hit['id']} score={score:.3f}\n{hit['text']}"
+                f"chunk {hit['id']} score={score:.3f}\n"
+                f"{hit['text']}"
             )
-            preview = self._preview(str(hit["text"]))
             sources.append(
                 Source(
                     document=document_name,
-                    page=(int(page_number) if page_number is not None else None),
+                    page=(
+                        int(page_number)
+                        if page_number is not None
+                        else None
+                    ),
                     chunk_id=str(hit["id"]),
                     score=score,
-                    vector_score=float(hit.get("vector_score") or 0.0),
-                    keyword_score=float(hit.get("keyword_score") or 0.0),
+                    vector_score=float(
+                        hit.get("vector_score") or 0.0
+                    ),
+                    keyword_score=float(
+                        hit.get("keyword_score") or 0.0
+                    ),
                     excerpt=str(hit["text"]),
-                    preview=preview,
+                    preview=self._preview(str(hit["text"])),
                 )
             )
 
         user_prompt = (
             f"Query type: {query_type.value}\n"
             f"Question:\n{question}\n\n"
-            "Answer-coverage rule: If the chunks support only part of this question, "
-            "answer the supported part and identify only the unsupported subpart. "
-            "Use the full refusal only when no substantive part is supported.\n\n"
-            "Retrieved chunks. You must not use any information outside these chunks:\n"
+            "Answer-coverage rule: If the chunks support only "
+            "part of this question, answer the supported part "
+            "and identify only the unsupported subpart. Use the "
+            "full refusal only when no substantive part is "
+            "supported.\n\n"
+            "Retrieved chunks. You must not use any information "
+            "outside these chunks:\n"
             + "\n\n---\n\n".join(context_blocks)
         )
-        answer = await self.ollama.chat([
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ])
-        if str(answer or "").strip().startswith(STRICT_REFUSAL):
-            partial_answer = self._supported_partial_answer(question, hits)
-            if partial_answer:
-                answer = partial_answer
-        figures = self._figure_references(hits, question=question)
-        return ChatResponse(
-            answer=answer,
-            sources=sources,
-            query_type=query_type.value,
-            figures=figures,
+        figures = self._figure_references(
+            hits,
+            question=question,
         )
+
+        return {
+            "aggregate": None,
+            "query_type": query_type,
+            "hits": hits,
+            "sources": sources,
+            "figures": figures,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT,
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                },
+            ],
+            "retrieval_elapsed_seconds": (
+                time.perf_counter() - retrieval_started
+            ),
+        }
 
     def _build_search_question(self, question: str) -> str:
         """Build a compact retrieval query while preserving the full question for generation."""

@@ -9,6 +9,8 @@ from app.core.config import Settings, get_settings
 from app.core.error_mapping import ExternalServiceError
 from app.core.errors import to_http_exception
 from app.models.schemas import (
+    ChatCompareRequest,
+    ChatCompareResponse,
     ChatRequest,
     ChatResponse,
     FigureReviewUpdateRequest,
@@ -124,6 +126,46 @@ async def list_documents(settings: Settings = Depends(get_settings)) -> list[dic
     return records
 
 
+def _allowed_answer_models(settings: Settings) -> list[str]:
+    return list(
+        dict.fromkeys(
+            [
+                settings.text_model,
+                *settings.comparison_models,
+            ]
+        )
+    )
+
+
+def _validate_answer_models(
+    settings: Settings,
+    models: list[str],
+) -> list[str]:
+    allowed = _allowed_answer_models(settings)
+    normalized = list(
+        dict.fromkeys(
+            str(model or "").strip()
+            for model in models
+            if str(model or "").strip()
+        )
+    )
+    unsupported = [
+        model
+        for model in normalized
+        if model not in allowed
+    ]
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Unsupported answer model.",
+                "unsupported": unsupported,
+                "allowed": allowed,
+            },
+        )
+    return normalized
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
@@ -131,9 +173,69 @@ async def chat(
     ollama: OllamaClient = Depends(get_ollama),
     vector_store: VectorStore = Depends(get_vector_store),
 ) -> ChatResponse:
+    selected_model = request.model or settings.text_model
+    _validate_answer_models(settings, [selected_model])
     service = QAService(settings, vector_store, ollama)
     try:
-        return await service.answer(request.question, request.top_k)
+        return await service.answer(
+            request.question,
+            request.top_k,
+            model=selected_model,
+        )
+    except ExternalServiceError as exc:
+        raise to_http_exception(exc) from exc
+
+
+@router.post(
+    "/chat/compare",
+    response_model=ChatCompareResponse,
+)
+async def compare_chat_models(
+    request: ChatCompareRequest,
+    settings: Settings = Depends(get_settings),
+    ollama: OllamaClient = Depends(get_ollama),
+    vector_store: VectorStore = Depends(get_vector_store),
+) -> ChatCompareResponse:
+    requested_models = (
+        request.models
+        if request.models is not None
+        else list(settings.comparison_models)
+    )
+    selected_models = _validate_answer_models(
+        settings,
+        requested_models,
+    )
+    if len(selected_models) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Comparison requires at least two "
+                "configured answer models."
+            ),
+        )
+
+    installed = set(await ollama.list_models())
+    missing = [
+        model
+        for model in selected_models
+        if model not in installed
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Comparison model is not installed in Ollama.",
+                "missing": missing,
+            },
+        )
+
+    service = QAService(settings, vector_store, ollama)
+    try:
+        return await service.compare(
+            request.question,
+            selected_models,
+            request.top_k,
+        )
     except ExternalServiceError as exc:
         raise to_http_exception(exc) from exc
 

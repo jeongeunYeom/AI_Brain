@@ -1,7 +1,17 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { analyzeImage, askQuestion, ChatResponse, createUploadJob, getUploadJob, uploadDocument, UploadJob } from "@/lib/api";
+import {
+  analyzeImage,
+  askComparison,
+  askQuestion,
+  ChatCompareResponse,
+  ChatResponse,
+  createUploadJob,
+  getUploadJob,
+  uploadDocument,
+  UploadJob,
+} from "@/lib/api";
 import { DocumentInfoPanel } from "@/components/DocumentInfoPanel";
 import { PlotPanel } from "@/components/PlotPanel";
 import { SystemStatusPanel } from "@/components/SystemStatusPanel";
@@ -21,6 +31,19 @@ type FigureReference = {
 type ChatResponseWithFigures = ChatResponse & {
   figures?: FigureReference[];
 };
+
+type ChatCompareResponseWithFigures = Omit<
+  ChatCompareResponse,
+  "figures"
+> & {
+  figures?: FigureReference[];
+};
+
+type AnswerMode =
+  | "qwen3:8b"
+  | "gemma4:latest"
+  | "compare";
+
 
 const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_URL ??
@@ -94,6 +117,7 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   response?: ChatResponseWithFigures;
+  comparison?: ChatCompareResponseWithFigures;
 };
 
 type SavedChat = {
@@ -163,6 +187,7 @@ export default function Home() {
   const [expandedSource, setExpandedSource] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [selectedFigure, setSelectedFigure] = useState<FigureReference | null>(null);
+  const [answerMode, setAnswerMode] = useState<AnswerMode>("qwen3:8b");
 
   useEffect(() => {
     if (!selectedFigure) {
@@ -392,24 +417,51 @@ export default function Home() {
     setMessages((previous) => [...previous, userMessage]);
     setQuestion("");
     setBusy(true);
-    setStatus("Searching vector database and asking Qwen3...");
+    setStatus(
+      answerMode === "compare"
+        ? "한 번 검색한 동일 근거로 Qwen3와 Gemma4를 순차 비교 중..."
+        : `검색 후 ${answerMode}에 질문 중...`,
+    );
 
     try {
-      const result = (await askQuestion(
-        submittedQuestion,
-      )) as ChatResponseWithFigures;
+      let assistantMessage: ChatMessage;
+      let sourceCount = 0;
 
-      const assistantMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: result.answer,
-        response: result,
-      };
+      if (answerMode === "compare") {
+        const result = (await askComparison(
+          submittedQuestion,
+          ["qwen3:8b", "gemma4:latest"],
+        )) as ChatCompareResponseWithFigures;
 
-      setMessages((previous) => [...previous, assistantMessage]);
+        sourceCount = result.sources?.length ?? 0;
+        assistantMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "",
+          comparison: result,
+        };
+      } else {
+        const result = (await askQuestion(
+          submittedQuestion,
+          answerMode,
+        )) as ChatResponseWithFigures;
+
+        sourceCount = result.sources?.length ?? 0;
+        assistantMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: result.answer,
+          response: result,
+        };
+      }
+
+      setMessages((previous) => [
+        ...previous,
+        assistantMessage,
+      ]);
       setStatus(
-        result.sources?.length
-          ? "Answer generated from retrieved sources."
+        sourceCount
+          ? "동일한 검색 근거를 사용해 답변을 생성했습니다."
           : "관련 문서 청크를 찾지 못했습니다.",
       );
     } catch (err) {
@@ -651,7 +703,19 @@ export default function Home() {
             >
               Figure review
             </a>
-            <span className="rounded-full border border-slate-200 px-3 py-1 text-xs">Qwen3 8B</span>
+            <select
+              value={answerMode}
+              onChange={(event) =>
+                setAnswerMode(event.target.value as AnswerMode)
+              }
+              disabled={busy}
+              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 outline-none disabled:opacity-50"
+              aria-label="답변 모델 선택"
+            >
+              <option value="qwen3:8b">Qwen3 8B</option>
+              <option value="gemma4:latest">Gemma4</option>
+              <option value="compare">Qwen3 vs Gemma4</option>
+            </select>
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100">☾</span>
           </div>
         </header>
@@ -685,7 +749,8 @@ export default function Home() {
                 );
               }
 
-              const response = message.response;
+              const comparison = message.comparison;
+              const response = message.response ?? comparison;
               const sourceCount = response?.sources?.length ?? 0;
               const figures = response?.figures ?? [];
 
@@ -695,8 +760,62 @@ export default function Home() {
                     AI
                   </div>
 
-                  <div className="max-w-[86%] rounded-3xl rounded-tl-md bg-white px-5 py-4 text-sm leading-7 text-slate-700 shadow-sm ring-1 ring-slate-200">
-                    <MarkdownMath content={message.content} />
+                  <div
+                    className={`${
+                      comparison ? "w-full max-w-none" : "max-w-[86%]"
+                    } rounded-3xl rounded-tl-md bg-white px-5 py-4 text-sm leading-7 text-slate-700 shadow-sm ring-1 ring-slate-200`}
+                  >
+                    {comparison ? (
+                      <>
+                        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                          <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
+                            동일 검색 근거
+                          </span>
+                          <span>
+                            retrieval{" "}
+                            {comparison.retrieval_elapsed_seconds.toFixed(2)}s
+                          </span>
+                          <span>
+                            모델은 RTX 3090 안정성을 위해 순차 실행
+                          </span>
+                        </div>
+
+                        <div className="grid gap-4 lg:grid-cols-2">
+                          {comparison.answers.map((item) => (
+                            <section
+                              key={`${message.id}:${item.model}`}
+                              className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                            >
+                              <div className="mb-3 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                                <h3 className="font-bold text-slate-900">
+                                  {item.model}
+                                </h3>
+                                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-500 ring-1 ring-slate-200">
+                                  {item.elapsed_seconds.toFixed(2)}s
+                                </span>
+                              </div>
+                              <MarkdownMath content={item.answer} />
+                            </section>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {message.response?.model && (
+                          <div className="mb-3 flex items-center gap-2 text-xs text-slate-500">
+                            <span className="rounded-full bg-indigo-50 px-3 py-1 font-semibold text-indigo-700">
+                              {message.response.model}
+                            </span>
+                            {message.response.elapsed_seconds != null && (
+                              <span>
+                                {message.response.elapsed_seconds.toFixed(2)}s
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        <MarkdownMath content={message.content} />
+                      </>
+                    )}
 
 
                     {figures.length > 0 && (
