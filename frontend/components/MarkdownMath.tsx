@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,7 +12,7 @@ type MarkdownMathProps = {
 const CITATION_SENTINEL = "__AI_BRAIN_CITATION__";
 
 const INLINE_CITATION_PATTERN =
-  /\[([^\]\n]+?)(?:,\s*|\s+)p\.?\s*(\d+)(?:\s+chunk\s+[^\]]+)?\]/gi;
+  /\[([^\]\n]+?)(?:,\s*|\s+)p\.?\s*(\d+)(?::c\d+)?(?:\s+chunk\s+[^\]]+)?\]/gi;
 
 function cleanCitationDocument(value: string): string {
   return value

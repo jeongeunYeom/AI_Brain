@@ -75,6 +75,40 @@ class EngineeringValidator:
                 rule_ids=rule_ids,
             )
 
+        asks_rft_comparison = (
+            "rft" in question_n
+            and (
+                "significant production" in question_n
+                or "생산" in question_n
+            )
+            and (
+                "appraisal" in question_n
+                or "비교" in question_n
+            )
+        )
+        source_text = " ".join(
+            str(source.get("excerpt") or "")
+            for source in sources
+        ).lower()
+        has_rft_comparison_evidence = (
+            "appraisal well rft survey" in source_text
+            and (
+                "rft survey after significant production"
+                in source_text
+            )
+        )
+        if (
+            asks_rft_comparison
+            and has_rft_comparison_evidence
+            and answer.strip() == STRICT_REFUSAL
+        ):
+            self._add_error(
+                errors,
+                rule_ids,
+                "WT-RFT-001",
+                "RFT 전후 비교 근거가 검색됐지만 전체 답변을 거절했습니다.",
+            )
+
         for sentence in self._sentences(answer_n):
             if not self._mentions_radial_flow(sentence):
                 continue

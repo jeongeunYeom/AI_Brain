@@ -278,3 +278,69 @@ def test_rewrite_prompt_discards_previous_answer(tmp_path):
     assert "완전히 폐기" in prompt
     assert "해당 설명은 틀렸습니다." in prompt
     assert "pressure derivative가 일정해져 수평 plateau" in prompt
+
+
+
+def test_general_rewrite_has_no_false_premise_framing(tmp_path):
+    service, _ = make_service(tmp_path, ["unused"])
+    validation = service.engineering_validator.validate_well_test_answer(
+        "Wellbore storage와 radial flow를 구분해줘.",
+        (
+            "Radial flow에서는 pressure가 unit-slope를 따른다. "
+            "[Well Test Analysis, p.219]"
+        ),
+        retrieved_sources=[
+            {
+                "document": "Well_Test_Analysis.pdf",
+                "page": 219,
+                "excerpt": HIT["text"],
+            }
+        ],
+    )
+    messages = service._build_rewrite_messages(
+        question=(
+            "Wellbore storage와 radial flow를 "
+            "pressure derivative로 구분해줘."
+        ),
+        previous_answer="bad",
+        validation=validation,
+        original_messages=prepared_payload()["messages"],
+    )
+    prompt = messages[-1]["content"]
+    assert "판정 1문장" not in prompt
+    assert "올바르게 수정한 문장" not in prompt
+    assert "'판정', '원래 답변'" in prompt
+
+
+def test_rft_comparison_routes_to_figure_retrieval(tmp_path):
+    service, _ = make_service(tmp_path, ["unused"])
+    assert service._is_figure_question(
+        "Appraisal Well RFT Survey와 RFT Survey "
+        "after Significant Production의 압력-심도 "
+        "분포를 비교해줘."
+    )
+
+
+def test_strict_refusal_hides_irrelevant_display_sources(tmp_path):
+    service, ollama = make_service(
+        tmp_path,
+        ["제공된 문서 근거로는 확인할 수 없습니다."],
+    )
+    prepared = install_prepared(
+        service,
+        prepared_payload(),
+    )
+
+    response = asyncio.run(
+        service.answer(
+            "Johansen Formation의 주입률을 알려줘."
+        )
+    )
+
+    assert prepared["calls"] == 1
+    assert ollama.calls == 1
+    assert response.sources == []
+    assert response.figures == []
+
+    record = load_run(tmp_path)
+    assert len(record["retrieved_sources"]) == 1

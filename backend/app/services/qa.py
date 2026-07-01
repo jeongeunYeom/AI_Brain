@@ -288,11 +288,21 @@ class QAService:
             }
         )
 
+        is_strict_refusal = (
+            str(answer or "").strip() == STRICT_REFUSAL
+        )
+        display_sources = (
+            [] if is_strict_refusal else prepared["sources"]
+        )
+        display_figures = (
+            [] if is_strict_refusal else prepared["figures"]
+        )
+
         return ChatResponse(
             answer=answer,
-            sources=prepared["sources"],
+            sources=display_sources,
             query_type=prepared["query_type"].value,
-            figures=prepared["figures"],
+            figures=display_figures,
             model=selected_model,
             elapsed_seconds=generation_elapsed,
         )
@@ -424,12 +434,33 @@ class QAService:
                 re.IGNORECASE,
             )
         )
-        opening_rule = (
-            "첫 문장을 반드시 '해당 설명은 틀렸습니다.'로 "
-            "시작하세요.\n"
-            if reviews_false_claim
-            else ""
-        )
+        if reviews_false_claim:
+            opening_rule = (
+                "첫 문장을 반드시 '해당 설명은 틀렸습니다.'로 "
+                "시작하세요.\n"
+            )
+            premise_rule = (
+                "6. '부분적으로 정확하다'고 표현하지 말고, "
+                "틀린 전제는 명확히 틀렸다고 판정하세요.\n"
+            )
+            output_rule = (
+                "출력 형식:\n"
+                "- 판정 1문장\n"
+                "- Wellbore storage 특징 1문장\n"
+                "- Radial flow 특징 1문장\n"
+                "- 올바르게 수정한 문장 1문장\n\n"
+            )
+        else:
+            opening_rule = ""
+            premise_rule = (
+                "6. 질문에 직접 답하고 '판정', '원래 답변', "
+                "'수정한 문장'이라는 표현을 사용하지 마세요.\n"
+            )
+            output_rule = (
+                "출력 형식:\n"
+                "- Wellbore storage 특징 1문장\n"
+                "- Radial flow 특징 1문장\n\n"
+            )
 
         rewrite_prompt = (
             "이전 답변은 수정하거나 요약하지 말고 완전히 "
@@ -450,16 +481,11 @@ class QAService:
             "unit-slope를 따른다고 쓰지 마세요.\n"
             "5. unit-slope와 constant 또는 plateau를 같은 "
             "곡선의 동시 특성으로 결합하지 마세요.\n"
-            "6. '부분적으로 정확하다'고 표현하지 말고, "
-            "틀린 전제는 명확히 틀렸다고 판정하세요.\n"
+            f"{premise_rule}"
             "7. 서로 다른 Figure의 설명을 혼합하지 말고, "
             "검색 근거에 없는 사실을 추가하지 마세요.\n"
             "8. 문서명과 페이지를 인용하세요.\n\n"
-            "출력 형식:\n"
-            "- 판정 1문장\n"
-            "- Wellbore storage 특징 1문장\n"
-            "- Radial flow 특징 1문장\n"
-            "- 올바르게 수정한 문장 1문장\n\n"
+            f"{output_rule}"
             f"원래 질문:\n{question}\n\n"
             "동일하게 재사용할 검색 근거와 지시:\n"
             f"{original_user_prompt}"
@@ -1041,7 +1067,14 @@ class QAService:
         return str(metadata.get("document") or "")
 
     def _is_figure_question(self, question: str) -> bool:
-        return FIGURE_INTENT_RE.search(question) is not None
+        return any(
+            pattern.search(question) is not None
+            for pattern in (
+                FIGURE_INTENT_RE,
+                TYPE_CURVE_INTENT_RE,
+                RFT_COMPARISON_RE,
+            )
+        )
 
     def _expand_figure_query(self, search_question: str, original_question: str) -> str:
         expansions = [

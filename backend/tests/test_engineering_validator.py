@@ -139,3 +139,27 @@ def test_pressure_derivative_is_not_bare_pressure():
     assert not validator._mentions_pressure(
         "pressure derivative가 plateau를 형성한다"
     )
+
+
+
+def test_supported_rft_comparison_refusal_is_blocked():
+    sources = [
+        {
+            "document": "Well_Test_Analysis.pdf",
+            "page": 440,
+            "excerpt": (
+                "title: Appraisal Well RFT Survey\n"
+                "title: RFT Survey after Significant Production"
+            ),
+        }
+    ]
+    result = EngineeringValidator().validate_well_test_answer(
+        (
+            "Appraisal Well RFT Survey와 RFT Survey after "
+            "Significant Production을 비교해줘."
+        ),
+        STRICT_REFUSAL,
+        retrieved_sources=sources,
+    )
+    assert result.passed is False
+    assert "WT-RFT-001" in result.rule_ids
