@@ -5,6 +5,7 @@ import json
 
 from app.core.config import Settings
 from app.models.schemas import FigureReference, Source
+from app.services.engineering_validator import ValidationResult
 from app.services.qa import QAService
 from app.services.query_router import QueryType
 
@@ -344,3 +345,48 @@ def test_strict_refusal_hides_irrelevant_display_sources(tmp_path):
 
     record = load_run(tmp_path)
     assert len(record["retrieved_sources"]) == 1
+
+
+
+def test_rft_rewrite_prompt_contains_numeric_requirements(tmp_path):
+    service, _ = make_service(tmp_path, ["unused"])
+    validation = ValidationResult(
+        passed=False,
+        errors=["Appraisal gradient missing."],
+        rule_ids=["WT-RFT-002", "WT-RFT-003"],
+    )
+    messages = service._build_rewrite_messages(
+        question=(
+            "Appraisal Well RFT Survey와 RFT Survey after "
+            "Significant Production을 비교해줘."
+        ),
+        previous_answer="bad",
+        validation=validation,
+        original_messages=prepared_payload()["messages"],
+    )
+    prompt = messages[-1]["content"]
+    assert "0.34 psi/ft" in prompt
+    assert "0.29" in prompt
+    assert "0.37" in prompt
+    assert "0.42 psi/ft" in prompt
+
+
+def test_fracture_rewrite_prompt_requires_partial_handling(tmp_path):
+    service, _ = make_service(tmp_path, ["unused"])
+    validation = ValidationResult(
+        passed=False,
+        errors=["Fracture flow missing."],
+        rule_ids=["WT-FRACTURE-001"],
+    )
+    messages = service._build_rewrite_messages(
+        question=(
+            "Wellbore storage, radial flow, fracture flow의 "
+            "특징을 설명해줘."
+        ),
+        previous_answer="bad",
+        validation=validation,
+        original_messages=prepared_payload()["messages"],
+    )
+    prompt = messages[-1]["content"]
+    assert "Fracture flow" in prompt
+    assert "그 항목만" in prompt
