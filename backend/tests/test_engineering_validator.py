@@ -163,3 +163,83 @@ def test_supported_rft_comparison_refusal_is_blocked():
     )
     assert result.passed is False
     assert "WT-RFT-001" in result.rule_ids
+
+
+
+def test_unit_slope_radial_association_is_blocked():
+    answer = (
+        "Unit-slope diagonal은 방사형 유동에서 나타난다. "
+        "압력과 도함수 응답은 겹친다. "
+        "[Well Test Analysis, p.219]"
+    )
+    result = EngineeringValidator().validate_well_test_answer(
+        (
+            "Log-log diagnostic plot에서 unit-slope diagonal은 "
+            "어떤 유동 구간을 의미하는지 설명해줘."
+        ),
+        answer,
+        retrieved_sources=SOURCES,
+    )
+    assert result.passed is False
+    assert "WT-UNIT-002" in result.rule_ids
+
+
+def test_rft_comparison_requires_all_gradients():
+    sources = [
+        {
+            "document": "Well_Test_Analysis.pdf",
+            "page": 440,
+            "excerpt": (
+                "Appraisal Well RFT Survey. "
+                "RFT Survey after Significant Production."
+            ),
+        }
+    ]
+    answer = (
+        "Figure 3은 0.29, 0.37, 0.42 psi/ft를 보인다. "
+        "[Well Test Analysis, p.440]"
+    )
+    result = EngineeringValidator().validate_well_test_answer(
+        (
+            "Appraisal Well RFT Survey와 RFT Survey after "
+            "Significant Production을 비교해줘."
+        ),
+        answer,
+        retrieved_sources=sources,
+    )
+    assert result.passed is False
+    assert "WT-RFT-002" in result.rule_ids
+
+
+def test_open_circle_supercharged_answer_passes():
+    answer = (
+        "Supercharged points는 open-circle points로 표시된다. "
+        "[Well Test Analysis, p.441]"
+    )
+    result = EngineeringValidator().validate_well_test_answer(
+        (
+            "RFT 그래프에서 supercharged points가 어떻게 "
+            "표시되거나 처리되었는지 설명해줘."
+        ),
+        answer,
+        retrieved_sources=SOURCES,
+    )
+    assert "WT-RFT-008" not in result.rule_ids
+
+
+def test_fracture_omission_is_blocked():
+    answer = (
+        "Wellbore storage는 unit-slope를 보이고 radial flow는 "
+        "derivative plateau를 보인다. "
+        "[Well Test Analysis, p.219]"
+    )
+    result = EngineeringValidator().validate_well_test_answer(
+        (
+            "Wellbore storage, radial flow, fracture flow의 "
+            "pressure derivative 특징을 설명해줘."
+        ),
+        answer,
+        retrieved_sources=SOURCES,
+    )
+    assert result.passed is False
+    assert "WT-FRACTURE-001" in result.rule_ids

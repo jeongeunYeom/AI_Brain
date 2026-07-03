@@ -405,6 +405,7 @@ class QAService:
         original_messages: list[dict[str, str]],
     ) -> list[dict[str, str]]:
         del previous_answer
+
         error_lines = "\n".join(
             f"- {message}"
             for message in validation.errors
@@ -417,13 +418,10 @@ class QAService:
             " ",
             question.lower(),
         )
+        rule_ids = set(validation.rule_ids)
+
         reviews_false_claim = bool(
             re.search(
-                r"radial\s*flow|방사\s*유동",
-                normalized_question,
-                re.IGNORECASE,
-            )
-            and re.search(
                 r"unit[- ]?slope|단위\s*기울기",
                 normalized_question,
                 re.IGNORECASE,
@@ -434,62 +432,127 @@ class QAService:
                 re.IGNORECASE,
             )
         )
+
+        topic_rules: list[str] = []
+        output_lines: list[str] = []
+
+        welltest_rule_ids = {
+            "WT-WBS-001",
+            "WT-WBS-002",
+            "WT-RADIAL-001",
+            "WT-RADIAL-002",
+            "WT-RADIAL-003",
+            "WT-RADIAL-004",
+            "WT-RADIAL-005",
+            "WT-UNIT-001",
+            "WT-UNIT-002",
+        }
+        if rule_ids.intersection(welltest_rule_ids):
+            topic_rules.extend(
+                [
+                    "Early-time wellbore storage에서는 pressure와 "
+                    "pressure derivative가 겹쳐 unit-slope "
+                    "diagonal을 따른다고 설명합니다.",
+                    "Middle-time radial flow에서는 pressure "
+                    "derivative가 일정해져 수평 plateau를 "
+                    "형성한다고 설명합니다.",
+                    "Unit-slope를 radial flow, MTR 또는 마지막 "
+                    "유동 단계의 특징으로 설명하지 않습니다.",
+                    "Radial flow에서 pressure 또는 derivative가 "
+                    "unit-slope를 따른다고 쓰지 않습니다.",
+                ]
+            )
+            output_lines.extend(
+                [
+                    "Wellbore storage 특징",
+                    "Radial flow 특징",
+                ]
+            )
+
+        if any(rule_id.startswith("WT-RFT-") for rule_id in rule_ids):
+            topic_rules.extend(
+                [
+                    "Figure 2 Appraisal RFT에는 0.34 psi/ft를 "
+                    "명시합니다.",
+                    "Figure 3 production 이후 RFT에는 0.29, "
+                    "0.37, 0.42 psi/ft를 모두 명시합니다.",
+                    "Figure 2와 Figure 3의 수치 및 설명을 "
+                    "서로 섞지 않습니다.",
+                    "문서에 수치가 있는데도 정확한 값이 없다고 "
+                    "말하지 않습니다.",
+                    "Figure 31, Well 13A, Well 211/19a-7 등 "
+                    "질문 밖의 Figure·유정 정보를 추가하지 않습니다.",
+                    "Supercharged point 질문에서는 open-circle "
+                    "표시 또는 제외·제거 방식을 문서 근거로 설명합니다.",
+                ]
+            )
+            output_lines.extend(
+                [
+                    "Figure 2 또는 Appraisal RFT",
+                    "Figure 3 또는 production 이후 RFT",
+                    "두 조사 비교",
+                ]
+            )
+
+        if "WT-FRACTURE-001" in rule_ids:
+            topic_rules.append(
+                "Fracture flow는 검색 근거가 있으면 그 특징을 "
+                "설명하고, 근거가 부족하면 그 항목만 "
+                "'제공된 문서 근거로 확인할 수 없습니다'라고 "
+                "명시합니다. Wellbore storage와 radial flow까지 "
+                "함께 거절하지 않습니다."
+            )
+            output_lines.append("Fracture flow 특징 또는 근거 부족")
+
         if reviews_false_claim:
             opening_rule = (
                 "첫 문장을 반드시 '해당 설명은 틀렸습니다.'로 "
-                "시작하세요.\n"
+                "시작합니다."
             )
-            premise_rule = (
-                "6. '부분적으로 정확하다'고 표현하지 말고, "
-                "틀린 전제는 명확히 틀렸다고 판정하세요.\n"
-            )
-            output_rule = (
-                "출력 형식:\n"
-                "- 판정 1문장\n"
-                "- Wellbore storage 특징 1문장\n"
-                "- Radial flow 특징 1문장\n"
-                "- 올바르게 수정한 문장 1문장\n\n"
-            )
+            output_lines.insert(0, "판정")
         else:
-            opening_rule = ""
-            premise_rule = (
-                "6. 질문에 직접 답하고 '판정', '원래 답변', "
-                "'수정한 문장'이라는 표현을 사용하지 마세요.\n"
-            )
-            output_rule = (
-                "출력 형식:\n"
-                "- Wellbore storage 특징 1문장\n"
-                "- Radial flow 특징 1문장\n\n"
+            opening_rule = (
+                "질문에 직접 답하고 '판정', '원래 답변', "
+                "'수정한 문장' 같은 메타 표현은 사용하지 않습니다."
             )
 
+        if not topic_rules:
+            topic_rules.append(
+                "검증 오류를 직접 수정하고 검색 근거 밖의 "
+                "사실은 추가하지 않습니다."
+            )
+        if not output_lines:
+            output_lines.append("질문에 대한 직접 답변")
+
+        numbered_rules = "\n".join(
+            f"{index}. {rule}"
+            for index, rule in enumerate(topic_rules, start=1)
+        )
+        output_format = "\n".join(
+            f"- {line}"
+            for line in dict.fromkeys(output_lines)
+        )
+
         rewrite_prompt = (
-            "이전 답변은 수정하거나 요약하지 말고 완전히 "
-            "폐기한 뒤 처음부터 다시 작성하세요.\n\n"
+            "이전 답변은 완전히 폐기하고 처음부터 다시 "
+            "작성하세요.\n\n"
             "검증 오류:\n"
             f"{error_lines}\n\n"
-            f"{opening_rule}"
-            "반드시 지킬 정답 기준:\n"
-            "1. Early-time wellbore storage에서는 pressure와 "
-            "pressure derivative가 서로 겹쳐 unit-slope "
-            "diagonal을 따릅니다.\n"
-            "2. Middle-time radial flow에서는 pressure "
-            "derivative가 일정해져 수평 plateau를 "
-            "형성합니다.\n"
-            "3. Radial flow에서 pressure가 unit-slope를 "
-            "따른다고 쓰지 마세요.\n"
-            "4. Radial flow에서 pressure derivative가 "
-            "unit-slope를 따른다고 쓰지 마세요.\n"
-            "5. unit-slope와 constant 또는 plateau를 같은 "
-            "곡선의 동시 특성으로 결합하지 마세요.\n"
-            f"{premise_rule}"
-            "7. 서로 다른 Figure의 설명을 혼합하지 말고, "
-            "검색 근거에 없는 사실을 추가하지 마세요.\n"
-            "8. 문서명과 페이지를 인용하세요.\n\n"
-            f"{output_rule}"
+            f"{opening_rule}\n\n"
+            "이번 질문에 적용할 정답 기준:\n"
+            f"{numbered_rules}\n\n"
+            "공통 조건:\n"
+            "- 서로 다른 Figure의 설명을 혼합하지 않습니다.\n"
+            "- 문서에 없는 사실, 수치, 공식, 페이지를 "
+            "추가하지 않습니다.\n"
+            "- 문서명과 페이지를 인용합니다.\n\n"
+            "출력에 포함할 항목:\n"
+            f"{output_format}\n\n"
             f"원래 질문:\n{question}\n\n"
             "동일하게 재사용할 검색 근거와 지시:\n"
             f"{original_user_prompt}"
         )
+
         return [
             {
                 "role": "system",

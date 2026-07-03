@@ -37,6 +37,7 @@ class ChatRequest(BaseModel):
     question: str = Field(min_length=1)
     top_k: int | None = None
     model: str | None = None
+    benchmark_id: str | None = None
 
 
 class ChatCompareRequest(BaseModel):

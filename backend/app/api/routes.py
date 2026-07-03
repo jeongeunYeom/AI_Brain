@@ -181,6 +181,7 @@ async def chat(
             request.question,
             request.top_k,
             model=selected_model,
+            benchmark_id=request.benchmark_id,
         )
     except ExternalServiceError as exc:
         raise to_http_exception(exc) from exc
