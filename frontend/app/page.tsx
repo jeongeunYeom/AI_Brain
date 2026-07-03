@@ -698,6 +698,12 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-2 text-slate-500">
             <a
+              href="/evaluation"
+              className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-100"
+            >
+              Benchmark
+            </a>
+            <a
               href="/review"
               className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
             >

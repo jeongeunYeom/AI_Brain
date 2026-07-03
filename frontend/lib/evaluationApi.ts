@@ -1,0 +1,128 @@
+export const EVALUATION_API_BASE = (
+  process.env.NEXT_PUBLIC_API_BASE ??
+  "http://127.0.0.1:8000/api"
+).replace(/\/$/, "");
+
+export type BenchmarkSummary = {
+  questions_total?: number;
+  questions_completed?: number;
+  infrastructure_errors?: number;
+  initial_benchmark_pass_rate?: number | null;
+  final_benchmark_pass_rate?: number | null;
+  initial_validator_pass_rate?: number | null;
+  final_validator_pass_rate?: number | null;
+  rewrite_success_rate?: number | null;
+  validator_detection_rate?: number | null;
+  validator_false_positive_rate?: number | null;
+  exact_refusal_rate?: number | null;
+  preferred_page_hit_rate?: number | null;
+  expected_document_hit_rate?: number | null;
+  average_attempts?: number | null;
+  average_retrieval_seconds?: number | null;
+  average_generation_seconds?: number | null;
+  average_total_seconds?: number | null;
+  category_metrics?: Record<
+    string,
+    {
+      total?: number;
+      final_passed?: number;
+      final_pass_rate?: number | null;
+    }
+  >;
+};
+
+export type BenchmarkAttempt = {
+  attempt?: number | null;
+  answer?: string | null;
+  elapsed_seconds?: number | null;
+  validation_passed?: boolean | null;
+  errors?: string[];
+  warnings?: string[];
+  rule_ids?: string[];
+};
+
+export type BenchmarkResult = {
+  id: string;
+  category?: string | null;
+  question?: string | null;
+  model?: string | null;
+  expected_behavior?: string | null;
+  initial_validator_passed?: boolean | null;
+  final_validator_passed?: boolean | null;
+  initial_benchmark_passed?: boolean | null;
+  final_benchmark_passed?: boolean | null;
+  rewrite_success?: boolean | null;
+  attempts?: number | null;
+  final_status?: string | null;
+  expected_document_hit?: boolean | null;
+  preferred_page_hit?: boolean | null;
+  source_pages?: number[];
+  retrieval_seconds?: number | null;
+  generation_seconds?: number | null;
+  total_seconds?: number | null;
+  initial_required_failures?: string[];
+  initial_forbidden_hits?: string[];
+  final_required_failures?: string[];
+  final_forbidden_hits?: string[];
+  initial_answer?: string | null;
+  final_answer?: string | null;
+  infrastructure_error?: string | null;
+  attempt_details?: BenchmarkAttempt[];
+};
+
+export type BenchmarkRun = {
+  benchmark_name?: string | null;
+  benchmark_file?: string | null;
+  run_id: string;
+  created_at?: string | null;
+  model?: string | null;
+  api_url?: string | null;
+  question_count?: number | null;
+  wall_clock_seconds?: number | null;
+  summary: BenchmarkSummary;
+  results: BenchmarkResult[];
+};
+
+export type BenchmarkRunListItem = {
+  run_id: string;
+  created_at?: string | null;
+  model?: string | null;
+  question_count?: number | null;
+  wall_clock_seconds?: number | null;
+  summary: BenchmarkSummary;
+};
+
+async function readJson<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function getBenchmarkRuns(
+  limit = 50,
+): Promise<BenchmarkRunListItem[]> {
+  const response = await fetch(
+    `${EVALUATION_API_BASE}/evaluation/runs?limit=${limit}`,
+    { cache: "no-store" },
+  );
+  return readJson<BenchmarkRunListItem[]>(response);
+}
+
+export async function getLatestBenchmarkRun(): Promise<BenchmarkRun> {
+  const response = await fetch(
+    `${EVALUATION_API_BASE}/evaluation/latest`,
+    { cache: "no-store" },
+  );
+  return readJson<BenchmarkRun>(response);
+}
+
+export async function getBenchmarkRun(
+  runId: string,
+): Promise<BenchmarkRun> {
+  const response = await fetch(
+    `${EVALUATION_API_BASE}/evaluation/runs/${encodeURIComponent(runId)}`,
+    { cache: "no-store" },
+  );
+  return readJson<BenchmarkRun>(response);
+}
