@@ -185,8 +185,8 @@ class EngineeringValidator:
 
         asks_plateau = bool(
             re.search(
-                r"(derivative|미분).{0,80}(plateau|평탄|수평)|"
-                r"(plateau|평탄|수평).{0,80}(derivative|미분)",
+                r"(derivative|미분|도함수).{0,80}(plateau|평탄|수평)|"
+                r"(plateau|평탄|수평).{0,80}(derivative|미분|도함수)",
                 question_n,
                 re.IGNORECASE,
             )
@@ -198,6 +198,196 @@ class EngineeringValidator:
                 "WT-RADIAL-004",
                 "Derivative plateau를 radial flow 또는 MTR과 연결하지 않았습니다.",
             )
+
+
+        asks_unit_slope_meaning = bool(
+            re.search(
+                r"unit[- ]?slope|단위\s*기울기",
+                question_n,
+                re.IGNORECASE,
+            )
+            and re.search(
+                r"의미|어떤\s*유동|무슨\s*구간|설명|meaning|which\s*flow",
+                question_n,
+                re.IGNORECASE,
+            )
+        )
+        if asks_unit_slope_meaning:
+            if not self._has_wbs_overlap(answer_n):
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-UNIT-001",
+                    "Unit-slope를 wellbore storage의 pressure-derivative overlap과 연결하지 않았습니다.",
+                )
+
+            misleading_unit_slope = any(
+                self._mentions_unit_slope(sentence)
+                and re.search(
+                    r"radial\s*flow|방사\s*유동|방사형|"
+                    r"middle[- ]?time|\bmtr\b|중기|"
+                    r"final\s*stage|last\s*stage|마지막\s*단계",
+                    sentence,
+                    re.IGNORECASE,
+                )
+                and not self._is_negated_or_corrective(sentence)
+                for sentence in self._sentences(answer_n)
+            )
+            if misleading_unit_slope:
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-UNIT-002",
+                    "Unit-slope를 radial flow, MTR 또는 마지막 유동 단계의 특징으로 설명했습니다.",
+                )
+
+        def has_number(value: str) -> bool:
+            return re.search(
+                rf"(?<!\d){re.escape(value)}(?!\d)",
+                answer_n,
+            ) is not None
+
+        has_psi_per_ft = bool(
+            re.search(
+                r"psi\s*/\s*ft|psi\s*per\s*ft",
+                answer_n,
+                re.IGNORECASE,
+            )
+        )
+
+        if asks_rft_comparison and has_rft_comparison_evidence:
+            if not (has_number("0.34") and has_psi_per_ft):
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-RFT-002",
+                    "Appraisal RFT의 0.34 psi/ft 압력 기울기 설명이 없습니다.",
+                )
+
+            after_values_present = all(
+                has_number(value)
+                for value in ("0.29", "0.37", "0.42")
+            )
+            if not (after_values_present and has_psi_per_ft):
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-RFT-003",
+                    "생산 후 RFT의 0.29, 0.37, 0.42 psi/ft 기울기를 모두 설명하지 않았습니다.",
+                )
+
+            if re.search(
+                r"(정확한|specific).{0,80}"
+                r"(기울기|gradient).{0,100}"
+                r"(확인할\s*수\s*없|not\s*available|not\s*provided)",
+                answer_n,
+                re.IGNORECASE,
+            ):
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-RFT-004",
+                    "문서에 기울기 수치가 있는데도 정확한 값이 없다고 설명했습니다.",
+                )
+
+        asks_figure_two_three = bool(
+            "rft" in question_n
+            and re.search(
+                r"figure\s*2|도\s*2",
+                question_n,
+                re.IGNORECASE,
+            )
+            and re.search(
+                r"figure\s*3|도\s*3",
+                question_n,
+                re.IGNORECASE,
+            )
+        )
+        if asks_figure_two_three:
+            figure_two_ok = bool(
+                re.search(
+                    r"figure\s*2.{0,500}0\.34",
+                    answer_n,
+                    re.IGNORECASE,
+                )
+            )
+            figure_three_ok = bool(
+                re.search(
+                    r"figure\s*3.{0,700}0\.29"
+                    r".{0,160}0\.37.{0,160}0\.42",
+                    answer_n,
+                    re.IGNORECASE,
+                )
+            )
+            if not figure_two_ok:
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-RFT-005",
+                    "Figure 2에 Appraisal RFT의 0.34 psi/ft를 배치하지 않았습니다.",
+                )
+            if not figure_three_ok:
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-RFT-006",
+                    "Figure 3에 생산 후 0.29, 0.37, 0.42 psi/ft를 배치하지 않았습니다.",
+                )
+            if re.search(
+                r"figure\s*31|well\s*13a|211/19a-7",
+                answer_n,
+                re.IGNORECASE,
+            ):
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-RFT-007",
+                    "Figure 2·3 질문에 다른 Figure 또는 다른 유정 정보를 혼합했습니다.",
+                )
+
+        asks_supercharged = "supercharg" in question_n
+        if asks_supercharged:
+            has_display_or_handling = bool(
+                re.search(
+                    r"open[- ]?circle|개방된\s*원|빈\s*원|"
+                    r"exclude|excluded|remove|removed|"
+                    r"disregard|제외|제거",
+                    answer_n,
+                    re.IGNORECASE,
+                )
+            )
+            if not has_display_or_handling:
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-RFT-008",
+                    "Supercharged point의 표시 또는 제외·제거 방식을 설명하지 않았습니다.",
+                )
+
+        asks_fracture_flow = bool(
+            re.search(
+                r"fracture\s*flow|균열\s*유동",
+                question_n,
+                re.IGNORECASE,
+            )
+        )
+        if asks_fracture_flow:
+            fracture_handled = bool(
+                re.search(
+                    r"(fracture|균열).{0,260}"
+                    r"(확인|근거|linear|half[- ]?slope|"
+                    r"1/2|절반|제공된\s*문서)",
+                    answer_n,
+                    re.IGNORECASE,
+                )
+            )
+            if not fracture_handled:
+                self._add_error(
+                    errors,
+                    rule_ids,
+                    "WT-FRACTURE-001",
+                    "Fracture flow를 설명하거나 해당 항목의 문서 근거 부족을 명시하지 않았습니다.",
+                )
 
         if not _CITATION_RE.search(answer):
             warnings.append(
@@ -242,7 +432,7 @@ class EngineeringValidator:
     def _mentions_radial_flow(value: str) -> bool:
         return bool(
             re.search(
-                r"radial\s*flow|방사\s*유동",
+                r"radial\s*flow|방사\s*유동|방사형",
                 value,
                 re.IGNORECASE,
             )
@@ -263,7 +453,7 @@ class EngineeringValidator:
     def _mentions_derivative(value: str) -> bool:
         return bool(
             re.search(
-                r"pressure\s*derivative|derivative|미분",
+                r"pressure\s*derivative|derivative|미분|도함수",
                 value,
                 re.IGNORECASE,
             )
@@ -294,12 +484,12 @@ class EngineeringValidator:
             re.search(
                 r"(wellbore\s*storage|유정\s*저장|웰보어\s*스토리지)"
                 r".{0,220}(pressure|압력).{0,120}"
-                r"(derivative|미분).{0,100}(overlap|coincid|겹)",
+                r"(derivative|미분|도함수).{0,100}(overlap|coincid|겹)",
                 answer,
                 re.IGNORECASE,
             )
             or re.search(
-                r"(pressure|압력).{0,120}(derivative|미분).{0,100}"
+                r"(pressure|압력).{0,120}(derivative|미분|도함수).{0,100}"
                 r"(overlap|coincid|겹).{0,220}"
                 r"(wellbore\s*storage|유정\s*저장|웰보어\s*스토리지)",
                 answer,
@@ -326,16 +516,16 @@ class EngineeringValidator:
     def _has_radial_plateau(self, answer: str) -> bool:
         return bool(
             re.search(
-                r"(radial\s*flow|방사\s*유동|middle[- ]?time|\bmtr\b|중기)"
-                r".{0,260}(pressure\s*derivative|derivative|미분)"
+                r"(radial\s*flow|방사\s*유동|방사형|middle[- ]?time|\bmtr\b|중기)"
+                r".{0,260}(pressure\s*derivative|derivative|미분|도함수)"
                 r".{0,120}(plateau|constant|평탄|수평|일정)",
                 answer,
                 re.IGNORECASE,
             )
             or re.search(
-                r"(pressure\s*derivative|derivative|미분)"
+                r"(pressure\s*derivative|derivative|미분|도함수)"
                 r".{0,120}(plateau|constant|평탄|수평|일정)"
-                r".{0,260}(radial\s*flow|방사\s*유동|middle[- ]?time|\bmtr\b|중기)",
+                r".{0,260}(radial\s*flow|방사\s*유동|방사형|middle[- ]?time|\bmtr\b|중기)",
                 answer,
                 re.IGNORECASE,
             )

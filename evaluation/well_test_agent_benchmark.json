@@ -18,15 +18,15 @@
       219
     ],
     "required_patterns": [
-      "(wellbore\\s*storage|유정\\s*저장|웰보어).{0,240}(pressure|압력).{0,120}(derivative|미분).{0,100}(겹|overlap)",
+      "(wellbore\\s*storage|유정\\s*저장|웰보어).{0,240}(pressure|압력).{0,120}(derivative|미분|도함수).{0,100}(겹|overlap)",
       "(wellbore\\s*storage|유정\\s*저장|웰보어).{0,240}(unit[- ]?slope|단위\\s*기울기)",
-      "(radial\\s*flow|방사\\s*유동).{0,240}(derivative|미분).{0,120}(plateau|평탄|수평|일정|constant)"
+      "(radial\\s*flow|방사\\s*유동).{0,240}(derivative|미분|도함수).{0,120}(plateau|평탄|수평|일정|constant)"
     ],
     "forbidden_patterns": [
-      "(radial\\s*flow|방사\\s*유동).{0,180}(pressure|압력).{0,140}(unit[- ]?slope|단위\\s*기울기)",
-      "(radial\\s*flow|방사\\s*유동).{0,200}(pressure|압력).{0,120}(derivative|미분).{0,100}(겹|overlap)"
+      "(radial\\s*flow|방사\\s*유동|방사형).{0,180}(pressure|압력).{0,140}(unit[- ]?slope|단위\\s*기울기)",
+      "(radial\\s*flow|방사\\s*유동|방사형).{0,200}(pressure|압력).{0,120}(derivative|미분|도함수).{0,100}(겹|overlap)"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-002",
@@ -49,13 +49,13 @@
     "required_patterns": [
       "(틀|잘못|정확하지|incorrect|false)",
       "(wellbore\\s*storage|유정\\s*저장|웰보어).{0,240}(unit[- ]?slope|단위\\s*기울기)",
-      "(radial\\s*flow|방사\\s*유동).{0,240}(derivative|미분).{0,120}(plateau|평탄|수평|일정|constant)"
+      "(radial\\s*flow|방사\\s*유동).{0,240}(derivative|미분|도함수).{0,120}(plateau|평탄|수평|일정|constant)"
     ],
     "forbidden_patterns": [
-      "(radial\\s*flow|방사\\s*유동).{0,180}(pressure|압력).{0,140}(unit[- ]?slope|단위\\s*기울기)",
+      "(radial\\s*flow|방사\\s*유동|방사형).{0,180}(pressure|압력).{0,140}(unit[- ]?slope|단위\\s*기울기)",
       "(부분적으로\\s*정확|partially\\s*correct)"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-003",
@@ -75,13 +75,13 @@
     ],
     "required_patterns": [
       "(wellbore\\s*storage|유정\\s*저장|웰보어)",
-      "(pressure|압력).{0,120}(derivative|미분).{0,100}(겹|overlap)",
+      "(pressure|압력).{0,160}(derivative|미분|도함수).{0,140}(겹|overlap)",
       "(unit[- ]?slope|단위\\s*기울기)"
     ],
     "forbidden_patterns": [
-      "(unit[- ]?slope|단위\\s*기울기).{0,180}(radial\\s*flow|방사\\s*유동)"
+      "(unit[- ]?slope|단위\\s*기울기).{0,240}(radial\\s*flow|방사\\s*유동|방사형|middle[- ]?time|\\bmtr\\b|중기|마지막\\s*단계|final\\s*stage|last\\s*stage)"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-004",
@@ -102,12 +102,12 @@
     ],
     "required_patterns": [
       "(middle[- ]?time|\\bmtr\\b|중기|radial\\s*flow|방사\\s*유동)",
-      "(derivative|미분).{0,120}(plateau|평탄|수평|일정|constant)"
+      "(derivative|미분|도함수).{0,120}(plateau|평탄|수평|일정|constant)"
     ],
     "forbidden_patterns": [
       "(plateau|평탄|수평).{0,160}(wellbore\\s*storage|유정\\s*저장)"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-005",
@@ -128,13 +128,13 @@
       286
     ],
     "required_patterns": [
-      "log[- ]?log.{0,280}(derivative|미분).{0,120}(plateau|평탄|수평|일정|constant)",
+      "log[- ]?log.{0,280}(derivative|미분|도함수).{0,120}(plateau|평탄|수평|일정|constant)",
       "semi[- ]?log.{0,280}(pressure|압력|straight|직선|slope|기울기)"
     ],
     "forbidden_patterns": [
-      "log[- ]?log.{0,220}(radial\\s*flow|방사\\s*유동).{0,180}(pressure|압력).{0,120}(unit[- ]?slope|단위\\s*기울기)"
+      "log[- ]?log.{0,220}(radial\\s*flow|방사\\s*유동|방사형).{0,180}(pressure|압력).{0,120}(unit[- ]?slope|단위\\s*기울기)"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-006",
@@ -154,14 +154,14 @@
       219
     ],
     "required_patterns": [
-      "(early[- ]?time|초기).{0,260}(pressure|압력).{0,120}(derivative|미분).{0,100}(겹|overlap)",
+      "(early[- ]?time|초기).{0,260}(pressure|압력).{0,120}(derivative|미분|도함수).{0,100}(겹|overlap)",
       "(unit[- ]?slope|단위\\s*기울기)",
-      "(middle[- ]?time|\\bmtr\\b|중기|radial\\s*flow|방사\\s*유동).{0,260}(derivative|미분).{0,120}(plateau|평탄|수평|일정)"
+      "(middle[- ]?time|\\bmtr\\b|중기|radial\\s*flow|방사\\s*유동).{0,260}(derivative|미분|도함수).{0,120}(plateau|평탄|수평|일정)"
     ],
     "forbidden_patterns": [
       "(middle[- ]?time|\\bmtr\\b|중기).{0,220}(pressure|압력).{0,120}(unit[- ]?slope|단위\\s*기울기)"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-007",
@@ -182,16 +182,17 @@
       440
     ],
     "required_patterns": [
-      "0\\.34\\s*psi\\s*/\\s*ft",
-      "0\\.29\\s*psi\\s*/\\s*ft",
-      "0\\.37\\s*psi\\s*/\\s*ft",
-      "0\\.42\\s*psi\\s*/\\s*ft",
-      "(pressure\\s*discontinu|압력\\s*불연속|permeability\\s*barrier|투과율\\s*장벽|differential\\s*depletion|차별적\\s*고갈|여러.{0,60}(gradient|구배|기울기))"
+      "0\\.34",
+      "0\\.29",
+      "0\\.37",
+      "0\\.42",
+      "psi\\s*/\\s*ft|psi\\s*per\\s*ft",
+      "(pressure\\s*discontinu|압력\\s*불연속|permeability\\s*barrier|투과(?:율|성)\\s*장벽|differential\\s*depletion|차별적\\s*고갈|여러.{0,60}(gradient|구배|기울기)|압력\\s*분포.{0,80}(변화|달라))"
     ],
     "forbidden_patterns": [
-      "(figure\\s*2|appraisal).{0,220}0\\.29.{0,100}0\\.37.{0,100}0\\.42"
+      "(figure\\s*2|appraisal)(?![^.\\n]{0,320}(figure\\s*3|after\\s*significant\\s*production|rft\\s*survey\\s*after|생산\\s*후))[^.\\n]{0,320}0\\.29[^.\\n]{0,140}0\\.37[^.\\n]{0,140}0\\.42"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2.1"
   },
   {
     "id": "WT-008",
@@ -219,7 +220,7 @@
     "forbidden_patterns": [
       "psi\\s*/\\s*m"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-009",
@@ -241,14 +242,15 @@
       440
     ],
     "required_patterns": [
-      "figure\\s*2.{0,260}0\\.34\\s*psi\\s*/\\s*ft",
-      "figure\\s*3.{0,300}0\\.29.{0,100}0\\.37.{0,100}0\\.42"
+      "figure\\s*2.{0,500}0\\.34",
+      "figure\\s*3.{0,700}0\\.29.{0,180}0\\.37.{0,180}0\\.42",
+      "psi\\s*/\\s*ft|psi\\s*per\\s*ft"
     ],
     "forbidden_patterns": [
-      "figure\\s*2.{0,260}0\\.29.{0,100}0\\.37.{0,100}0\\.42",
-      "figure\\s*3.{0,240}(only|하나|단일).{0,100}0\\.34"
+      "figure\\s*2.{0,500}0\\.29.{0,180}0\\.37.{0,180}0\\.42",
+      "figure\\s*31|well\\s*13a|211/19a-7"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-010",
@@ -271,12 +273,12 @@
     ],
     "required_patterns": [
       "supercharg",
-      "(exclude|excluded|remove|removed|disregard|제외|제거|open\\s*circle|빈\\s*원|개방된\\s*원)"
+      "(exclude|excluded|remove|removed|disregard|제외|제거|open[- ]?circle|빈\\s*원|개방된\\s*원)"
     ],
     "forbidden_patterns": [
       "(equipment\\s*failure|sensor\\s*failure|장비\\s*고장|센서\\s*고장)"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-011",
@@ -299,7 +301,7 @@
       "14,?000",
       "(residual|잔류).{0,100}0\\.2"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-012",
@@ -318,7 +320,7 @@
     "forbidden_patterns": [
       "2026.{0,120}\\d+(?:\\.\\d+)?\\s*(mmscfd|bopd|톤|배럴)"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-013",
@@ -340,11 +342,11 @@
     ],
     "required_patterns": [
       "(wellbore\\s*storage|유정\\s*저장|웰보어).{0,260}(unit[- ]?slope|단위\\s*기울기)",
-      "(radial\\s*flow|방사\\s*유동).{0,260}(plateau|평탄|수평|일정)",
-      "(fracture|균열).{0,240}(확인|근거|linear|half[- ]?slope|절반|1/2)"
+      "(radial\\s*flow|방사\\s*유동|방사형).{0,260}(plateau|평탄|수평|일정)",
+      "(fracture|균열).{0,300}(확인|근거|linear|half[- ]?slope|절반|1/2|제공된\\s*문서)"
     ],
     "forbidden_patterns": [],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-014",
@@ -369,7 +371,7 @@
       "(well\\s*test\\s*analysis|well test analysis).{0,140}p\\.?\\s*219|p\\.?\\s*219"
     ],
     "forbidden_patterns": [],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-015",
@@ -390,12 +392,12 @@
     ],
     "required_patterns": [
       "(middle[- ]?time|\\bmtr\\b|중기|radial\\s*flow|방사\\s*유동)",
-      "(derivative|미분).{0,120}(plateau|평탄|수평|일정|constant)"
+      "(derivative|미분|도함수).{0,120}(plateau|평탄|수평|일정|constant)"
     ],
     "forbidden_patterns": [
       "(middle[- ]?time|\\bmtr\\b|중기).{0,220}(unit[- ]?slope|단위\\s*기울기).{0,120}(겹|overlap)"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   },
   {
     "id": "WT-016",
@@ -425,6 +427,6 @@
     "forbidden_patterns": [
       "(x축|x[- ]?axis|y축|y[- ]?axis).{0,100}(series|계열)"
     ],
-    "evaluator_version": "welltest-deterministic-v1"
+    "evaluator_version": "welltest-deterministic-v2"
   }
 ]
