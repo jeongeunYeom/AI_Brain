@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -q -r requirements.txt
+      - name: Run refactor regression tests
+        env:
+          PYTHONPATH: .
+        run: >-
+          python -m pytest -q
+          tests/test_api_routes.py
+          tests/test_figure_preview.py
+          tests/test_benchmark_dashboard.py
+      - name: Run full backend suite (informational)
+        id: full-suite
+        continue-on-error: true
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q > pytest.log 2>&1
+      - name: Upload full backend test log
+        if: steps.full-suite.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-pytest-log
+          path: backend/pytest.log
+          if-no-files-found: ignore
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.28.1 --activate
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile --reporter=silent
+      - name: Build frontend
+        run: |
+          pnpm build > build.log 2>&1 || {
+            tail -n 100 build.log
+            exit 1
+          }
+      - name: Upload frontend build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-log
+          path: frontend/build.log
+          if-no-files-found: ignore
