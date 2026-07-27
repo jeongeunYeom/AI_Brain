@@ -409,7 +409,7 @@ class AgentPlanner:
                 lines.append("")
 
             with open(output_path, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(lines))
+                handle.write(chr(10).join(lines))
 
             print(f"Saved report: {{output_path}}")
             """
