@@ -53,17 +53,79 @@ def test_agent_routes_are_registered() -> None:
     assert "/api/agent/workspace" in paths
 
 
-def test_workspace_escape_is_blocked(client: TestClient) -> None:
-    response = client.post(
+@pytest.mark.parametrize(
+    ("request_text", "target_path", "expected_message"),
+    [
+        (
+            r"C:\Windows\System32\drivers\etc\hosts 파일을 읽어줘.",
+            None,
+            "workspace",
+        ),
+        ("../.env 파일을 읽어줘.", None, "workspace"),
+        (".env 파일을 읽어줘.", None, "비밀정보"),
+        ("https://example.com/data.csv 파일을 읽어줘.", None, "URL"),
+        ("시스템 파일을 읽어줘.", r"C:\Windows\win.ini", "workspace"),
+    ],
+)
+def test_unsafe_path_requests_are_recorded_as_failed(
+    client: TestClient,
+    agent_settings: Settings,
+    request_text: str,
+    target_path: str | None,
+    expected_message: str,
+) -> None:
+    payload = {
+        "request": request_text,
+        "permission_level": 1,
+    }
+    if target_path is not None:
+        payload["target_path"] = target_path
+
+    response = client.post("/api/agent/plan", json=payload)
+
+    assert response.status_code == 201
+    task = response.json()
+    assert task["status"] == "failed"
+    assert task["required_tools"] == []
+    assert task["actions"] == []
+    assert expected_message in task["error"]
+    assert task["read_files"] == []
+    assert task["created_files"] == []
+    assert task["modified_files"] == []
+    assert (agent_settings.agent_runs_dir / f"{task['task_id']}.json").is_file()
+
+
+def test_rejected_task_cannot_be_executed(client: TestClient) -> None:
+    planned = client.post(
         "/api/agent/plan",
         json={
-            "request": "작업 폴더 밖의 파일을 읽어줘",
-            "target_path": "../secret.txt",
+            "request": "../secret.txt 파일을 읽어줘.",
             "permission_level": 1,
         },
     )
-    assert response.status_code == 400
-    assert "workspace" in response.json()["detail"]
+    assert planned.status_code == 201
+    task = planned.json()
+    assert task["status"] == "failed"
+
+    executed = client.post(
+        f"/api/agent/tasks/{task['task_id']}/execute",
+        json={"approved": True},
+    )
+    assert executed.status_code == 409
+
+
+def test_safe_directory_request_still_uses_list_directory(client: TestClient) -> None:
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "workspace 폴더 목록을 확인해줘.",
+            "permission_level": 1,
+        },
+    )
+    assert response.status_code == 201
+    task = response.json()
+    assert task["status"] == "planned"
+    assert task["required_tools"] == ["list_directory"]
 
 
 def test_read_only_csv_plan_and_execute(
