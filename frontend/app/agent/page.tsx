@@ -7,6 +7,7 @@ import {
   cancelAgentTask,
   createAgentPlan,
   executeAgentTask,
+  getAgentCsvColumns,
   getAgentTask,
   listAgentWorkspace,
   WorkspaceEntry,
@@ -31,6 +32,11 @@ export default function AgentPage() {
   const [request, setRequest] = useState("");
   const [targetPath, setTargetPath] = useState("");
   const [outputPath, setOutputPath] = useState("");
+  const [xColumn, setXColumn] = useState("");
+  const [yColumn, setYColumn] = useState("");
+  const [csvColumns, setCsvColumns] = useState<string[]>([]);
+  const [columnsLoading, setColumnsLoading] = useState(false);
+  const [columnError, setColumnError] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [oldText, setOldText] = useState("");
   const [newText, setNewText] = useState("");
@@ -57,15 +63,49 @@ export default function AgentPage() {
     void refreshWorkspace(".");
   }, []);
 
+  useEffect(() => {
+    const path = targetPath.trim();
+    setCsvColumns([]);
+    setXColumn("");
+    setYColumn("");
+    setColumnError(null);
+
+    if (!path.toLowerCase().endsWith(".csv")) return;
+
+    let canceled = false;
+    setColumnsLoading(true);
+    void getAgentCsvColumns(path)
+      .then((result) => {
+        if (!canceled) setCsvColumns(result.columns);
+      })
+      .catch((err) => {
+        if (!canceled) {
+          setColumnError(
+            err instanceof Error ? err.message : "CSV 열 목록을 읽지 못했습니다.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!canceled) setColumnsLoading(false);
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [targetPath]);
+
   async function makePlan() {
     if (!request.trim()) return;
     setBusy(true);
     setError(null);
+    setTask(null);
     try {
       const planned = await createAgentPlan({
         request: request.trim(),
         target_path: targetPath.trim() || undefined,
         output_path: outputPath.trim() || undefined,
+        x_column: xColumn || undefined,
+        y_column: yColumn || undefined,
         content: content || undefined,
         old_text: oldText || undefined,
         new_text: newText || undefined,
@@ -120,6 +160,8 @@ export default function AgentPage() {
     }
     setTargetPath(entry.path);
   }
+
+  const isCsvTarget = targetPath.trim().toLowerCase().endsWith(".csv");
 
   return (
     <main className="min-h-screen bg-slate-100 px-4 py-8 text-slate-900">
@@ -176,6 +218,61 @@ export default function AgentPage() {
                 />
               </label>
             </div>
+
+            {isCsvTarget && (
+              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-bold text-indigo-950">산점도 열 선택</p>
+                    <p className="mt-1 text-xs text-indigo-700">
+                      비워두면 요청 문장에서 열을 인식하고, 찾지 못하면 숫자 열을 자동 선택합니다.
+                    </p>
+                  </div>
+                  {columnsLoading && (
+                    <span className="text-xs font-semibold text-indigo-600">열 불러오는 중...</span>
+                  )}
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="text-xs font-semibold text-slate-600">
+                    X축 열
+                    <select
+                      value={xColumn}
+                      onChange={(event) => setXColumn(event.target.value)}
+                      disabled={columnsLoading || csvColumns.length === 0}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none disabled:opacity-50"
+                    >
+                      <option value="">자동 인식</option>
+                      {csvColumns.map((column) => (
+                        <option key={column} value={column} disabled={column === yColumn}>
+                          {column}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    Y축 열
+                    <select
+                      value={yColumn}
+                      onChange={(event) => setYColumn(event.target.value)}
+                      disabled={columnsLoading || csvColumns.length === 0}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none disabled:opacity-50"
+                    >
+                      <option value="">자동 인식</option>
+                      {csvColumns.map((column) => (
+                        <option key={column} value={column} disabled={column === xColumn}>
+                          {column}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {columnError && (
+                  <p className="mt-3 rounded-xl bg-red-50 p-3 text-xs text-red-700">
+                    CSV 열을 불러오지 못했습니다: {columnError}
+                  </p>
+                )}
+              </div>
+            )}
 
             <label className="block text-xs font-semibold text-slate-600">
               권한 단계
