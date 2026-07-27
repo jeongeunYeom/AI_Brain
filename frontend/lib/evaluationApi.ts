@@ -1,7 +1,4 @@
-export const EVALUATION_API_BASE = (
-  process.env.NEXT_PUBLIC_API_BASE ??
-  "http://127.0.0.1:8000/api"
-).replace(/\/$/, "");
+import { requestJson } from "./http";
 
 export type BenchmarkSummary = {
   questions_total?: number;
@@ -83,46 +80,31 @@ export type BenchmarkRun = {
   results: BenchmarkResult[];
 };
 
-export type BenchmarkRunListItem = {
-  run_id: string;
-  created_at?: string | null;
-  model?: string | null;
-  question_count?: number | null;
-  wall_clock_seconds?: number | null;
-  summary: BenchmarkSummary;
-};
+export type BenchmarkRunListItem = Pick<
+  BenchmarkRun,
+  | "run_id"
+  | "created_at"
+  | "model"
+  | "question_count"
+  | "wall_clock_seconds"
+  | "summary"
+>;
 
-async function readJson<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  return response.json() as Promise<T>;
-}
-
-export async function getBenchmarkRuns(
+export function getBenchmarkRuns(
   limit = 50,
 ): Promise<BenchmarkRunListItem[]> {
-  const response = await fetch(
-    `${EVALUATION_API_BASE}/evaluation/runs?limit=${limit}`,
-    { cache: "no-store" },
-  );
-  return readJson<BenchmarkRunListItem[]>(response);
+  return requestJson(`/evaluation/runs?limit=${limit}`, {
+    cache: "no-store",
+  });
 }
 
-export async function getLatestBenchmarkRun(): Promise<BenchmarkRun> {
-  const response = await fetch(
-    `${EVALUATION_API_BASE}/evaluation/latest`,
-    { cache: "no-store" },
-  );
-  return readJson<BenchmarkRun>(response);
+export function getLatestBenchmarkRun(): Promise<BenchmarkRun> {
+  return requestJson("/evaluation/latest", { cache: "no-store" });
 }
 
-export async function getBenchmarkRun(
-  runId: string,
-): Promise<BenchmarkRun> {
-  const response = await fetch(
-    `${EVALUATION_API_BASE}/evaluation/runs/${encodeURIComponent(runId)}`,
+export function getBenchmarkRun(runId: string): Promise<BenchmarkRun> {
+  return requestJson(
+    `/evaluation/runs/${encodeURIComponent(runId)}`,
     { cache: "no-store" },
   );
-  return readJson<BenchmarkRun>(response);
 }
