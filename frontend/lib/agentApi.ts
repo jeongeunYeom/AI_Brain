@@ -1,0 +1,116 @@
+import { requestJson } from "./http";
+
+export type AgentPermissionLevel = 1 | 2 | 3;
+export type AgentTaskStatus =
+  | "planned"
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled";
+
+export type AgentToolName =
+  | "list_directory"
+  | "read_file"
+  | "create_file"
+  | "edit_file"
+  | "run_python";
+
+export type AgentAction = {
+  action_id: string;
+  tool: AgentToolName;
+  description: string;
+  arguments: Record<string, unknown>;
+  target_files: string[];
+  requires_approval: boolean;
+  preview?: string | null;
+};
+
+export type AgentTask = {
+  task_id: string;
+  request: string;
+  status: AgentTaskStatus;
+  permission_level: AgentPermissionLevel;
+  plan: string[];
+  required_tools: AgentToolName[];
+  actions: AgentAction[];
+  requires_approval: boolean;
+  approved: boolean;
+  workspace: string;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  current_action?: string | null;
+  progress_step: number;
+  progress_total: number;
+  tools_used: string[];
+  read_files: string[];
+  created_files: string[];
+  modified_files: string[];
+  backups: string[];
+  execution_records: Array<Record<string, unknown>>;
+  results: Array<{
+    action_id: string;
+    tool: AgentToolName;
+    description: string;
+    result: Record<string, unknown>;
+  }>;
+  error?: string | null;
+  cancel_requested: boolean;
+};
+
+export type AgentPlanInput = {
+  request: string;
+  target_path?: string;
+  output_path?: string;
+  content?: string;
+  old_text?: string;
+  new_text?: string;
+  python_code?: string;
+  permission_level: AgentPermissionLevel;
+};
+
+export type WorkspaceEntry = {
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+  extension?: string | null;
+  size_bytes?: number | null;
+  modified_at: string;
+};
+
+export type WorkspaceListing = {
+  path: string;
+  entries: WorkspaceEntry[];
+};
+
+export function createAgentPlan(input: AgentPlanInput): Promise<AgentTask> {
+  return requestJson("/agent/plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function executeAgentTask(
+  taskId: string,
+  approved: boolean,
+): Promise<AgentTask> {
+  return requestJson(`/agent/tasks/${taskId}/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ approved }),
+  });
+}
+
+export function getAgentTask(taskId: string): Promise<AgentTask> {
+  return requestJson(`/agent/tasks/${taskId}`, { cache: "no-store" });
+}
+
+export function cancelAgentTask(taskId: string): Promise<AgentTask> {
+  return requestJson(`/agent/tasks/${taskId}/cancel`, { method: "POST" });
+}
+
+export function listAgentWorkspace(path = "."): Promise<WorkspaceListing> {
+  const query = new URLSearchParams({ path });
+  return requestJson(`/agent/workspace?${query}`, { cache: "no-store" });
+}
