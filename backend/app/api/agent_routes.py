@@ -12,6 +12,7 @@ from app.agents.agent_service import (
 )
 from app.core.config import Settings, get_settings
 from app.models.agent_schemas import (
+    AgentCsvColumnsResponse,
     AgentExecuteRequest,
     AgentPlanRequest,
     AgentTaskResponse,
@@ -90,4 +91,15 @@ def list_agent_workspace(
     try:
         return AgentWorkspaceResponse.model_validate(service.list_workspace(path))
     except (AgentSecurityError, FileNotFoundError, NotADirectoryError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/csv-columns", response_model=AgentCsvColumnsResponse)
+def get_agent_csv_columns(
+    path: str = Query(min_length=1, max_length=500),
+    service: AgentService = Depends(get_agent_service),
+) -> AgentCsvColumnsResponse:
+    try:
+        return AgentCsvColumnsResponse.model_validate(service.get_csv_columns(path))
+    except (AgentSecurityError, FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
