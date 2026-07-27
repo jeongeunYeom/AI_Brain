@@ -62,6 +62,8 @@ export type AgentPlanInput = {
   request: string;
   target_path?: string;
   output_path?: string;
+  x_column?: string;
+  y_column?: string;
   content?: string;
   old_text?: string;
   new_text?: string;
@@ -81,6 +83,11 @@ export type WorkspaceEntry = {
 export type WorkspaceListing = {
   path: string;
   entries: WorkspaceEntry[];
+};
+
+export type CsvColumnsResponse = {
+  path: string;
+  columns: string[];
 };
 
 export function createAgentPlan(input: AgentPlanInput): Promise<AgentTask> {
@@ -113,4 +120,9 @@ export function cancelAgentTask(taskId: string): Promise<AgentTask> {
 export function listAgentWorkspace(path = "."): Promise<WorkspaceListing> {
   const query = new URLSearchParams({ path });
   return requestJson(`/agent/workspace?${query}`, { cache: "no-store" });
+}
+
+export function getAgentCsvColumns(path: string): Promise<CsvColumnsResponse> {
+  const query = new URLSearchParams({ path });
+  return requestJson(`/agent/csv-columns?${query}`, { cache: "no-store" });
 }
