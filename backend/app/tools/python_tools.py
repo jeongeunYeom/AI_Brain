@@ -4,6 +4,7 @@ import ast
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -56,6 +57,16 @@ _BLOCKED_ATTRIBUTES = {
     "fork",
     "spawn",
     "getenv",
+    "modules",
+    "run",
+    "call",
+    "check_call",
+    "check_output",
+    "Popen",
+    "communicate",
+    "open",
+    "imread",
+    "urlopen",
 }
 
 
@@ -90,6 +101,8 @@ class PythonTools:
                     raise AgentSecurityError(
                         f"Blocked Python attribute access: {node.attr}"
                     )
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                self._check_string_literal(node.value)
             elif isinstance(node, (ast.Global, ast.Nonlocal)):
                 raise AgentSecurityError("Global and nonlocal statements are not allowed.")
 
@@ -167,6 +180,23 @@ class PythonTools:
             "modified_files": modified,
             "success": exit_code == 0,
         }
+
+    @staticmethod
+    def _check_string_literal(value: str) -> None:
+        stripped = value.strip()
+        lowered = stripped.lower()
+        if lowered.startswith(("http://", "https://", "ftp://", "file://")):
+            raise AgentSecurityError("Network and file URLs are not allowed.")
+
+        normalized = stripped.replace("\\", "/")
+        if (
+            normalized.startswith("/")
+            or re.match(r"^[A-Za-z]:/", normalized)
+            or ".." in normalized.split("/")
+        ):
+            raise AgentSecurityError(
+                "Absolute paths and parent-directory traversal are not allowed in Python code."
+            )
 
     def _check_import(self, module_name: str) -> None:
         root = module_name.split(".", 1)[0]
