@@ -44,6 +44,19 @@ def wait_for_task(client: TestClient, task_id: str) -> dict:
     raise AssertionError("Agent task did not finish in time")
 
 
+def write_co2_csv(agent_settings: Settings) -> Path:
+    target = agent_settings.agent_workspace_dir / "co2_result.csv"
+    target.write_text(
+        "srco2,trapped_ratio,free_ratio,total_storage_mt\n"
+        "0.10,94.9,5.1,5.2\n"
+        "0.20,88.7,11.3,5.2\n"
+        "0.30,81.2,18.8,5.2\n"
+        "0.40,71.8,28.2,5.2\n",
+        encoding="utf-8",
+    )
+    return target
+
+
 def test_agent_routes_are_registered() -> None:
     paths = {route.path for route in app.routes}
     assert "/api/agent/plan" in paths
@@ -51,6 +64,7 @@ def test_agent_routes_are_registered() -> None:
     assert "/api/agent/tasks/{task_id}" in paths
     assert "/api/agent/tasks/{task_id}/cancel" in paths
     assert "/api/agent/workspace" in paths
+    assert "/api/agent/csv-columns" in paths
 
 
 @pytest.mark.parametrize(
@@ -162,6 +176,139 @@ def test_read_only_csv_plan_and_execute(
     assert csv_info["columns"] == ["pressure", "rate"]
     assert csv_info["row_count"] == 2
     assert result["modified_files"] == []
+
+
+def test_csv_columns_endpoint(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    response = client.get(
+        "/api/agent/csv-columns",
+        params={"path": "co2_result.csv"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "path": "co2_result.csv",
+        "columns": ["srco2", "trapped_ratio", "free_ratio", "total_storage_mt"],
+    }
+
+
+def test_scatter_plan_uses_explicit_columns(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "co2_result.csv로 산점도를 만들어줘.",
+            "target_path": "co2_result.csv",
+            "output_path": "results/selected.png",
+            "x_column": "trapped_ratio",
+            "y_column": "free_ratio",
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    run_action = next(
+        action for action in task["actions"] if action["tool"] == "run_python"
+    )
+    assert run_action["arguments"]["x_column"] == "trapped_ratio"
+    assert run_action["arguments"]["y_column"] == "free_ratio"
+    assert "x_name = 'trapped_ratio'" in run_action["preview"]
+    assert "y_name = 'free_ratio'" in run_action["preview"]
+    assert "X축은 trapped_ratio, Y축은 free_ratio" in " ".join(task["plan"])
+
+
+def test_scatter_plan_infers_korean_column_aliases(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": (
+                "co2_result.csv에서 포획된 CO₂ 비율과 자유 상태 CO₂ 비율의 "
+                "관계를 산점도로 만들어줘."
+            ),
+            "target_path": "co2_result.csv",
+            "output_path": "results/inferred.png",
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    run_action = next(
+        action for action in task["actions"] if action["tool"] == "run_python"
+    )
+    assert run_action["arguments"]["x_column"] == "trapped_ratio"
+    assert run_action["arguments"]["y_column"] == "free_ratio"
+
+
+def test_scatter_plan_rejects_unknown_column(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "co2_result.csv로 산점도를 만들어줘.",
+            "target_path": "co2_result.csv",
+            "x_column": "missing_column",
+            "y_column": "free_ratio",
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "missing_column" in detail
+    assert "trapped_ratio" in detail
+
+
+def test_scatter_executes_with_selected_columns(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    planned = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "co2_result.csv로 산점도를 만들어줘.",
+            "target_path": "co2_result.csv",
+            "output_path": "results/trapped_vs_free.png",
+            "x_column": "trapped_ratio",
+            "y_column": "free_ratio",
+            "permission_level": 3,
+        },
+    )
+    assert planned.status_code == 201
+    task = planned.json()
+
+    executed = client.post(
+        f"/api/agent/tasks/{task['task_id']}/execute",
+        json={"approved": True},
+    )
+    assert executed.status_code == 200
+    result = wait_for_task(client, task["task_id"])
+
+    assert result["status"] == "completed"
+    assert "results/trapped_vs_free.png" in result["created_files"]
+    output = agent_settings.agent_workspace_dir / "results/trapped_vs_free.png"
+    assert output.is_file()
+    assert output.stat().st_size > 0
 
 
 def test_report_requires_approval_and_creates_file(
