@@ -13,6 +13,7 @@ from app.agents.permission_manager import (
     AgentSecurityError,
     PermissionManager,
 )
+from app.agents.request_security import validate_agent_plan_request
 from app.agents.tool_registry import ToolRegistry
 from app.core.config import Settings
 from app.models.agent_schemas import (
@@ -49,7 +50,12 @@ class AgentService:
         self.executor = AgentExecutor(self.permissions, self.tools)
 
     def create_plan(self, request: AgentPlanRequest) -> AgentTaskResponse:
-        planned = self.planner.plan(request)
+        try:
+            validate_agent_plan_request(request)
+            planned = self.planner.plan(request)
+        except AgentSecurityError as exc:
+            return self._record_rejected_plan(request, str(exc))
+
         for action in planned.actions:
             self.permissions.require_tool_level(request.permission_level, action.tool)
         task_id = self._new_task_id()
@@ -96,7 +102,11 @@ class AgentService:
             status = AgentTaskStatus(task["status"])
             if status == AgentTaskStatus.CANCELED:
                 raise AgentTaskConflict("Canceled tasks cannot be executed.")
-            if status in {AgentTaskStatus.RUNNING, AgentTaskStatus.COMPLETED}:
+            if status in {
+                AgentTaskStatus.RUNNING,
+                AgentTaskStatus.COMPLETED,
+                AgentTaskStatus.FAILED,
+            }:
                 raise AgentTaskConflict(f"Task is already {status.value}.")
             if task["requires_approval"] and not approved:
                 raise AgentApprovalRequired(
@@ -150,6 +160,47 @@ class AgentService:
 
     def list_workspace(self, path: str = ".") -> dict:
         return self.tools.directory_tools.list_directory(path)
+
+    def _record_rejected_plan(
+        self,
+        request: AgentPlanRequest,
+        message: str,
+    ) -> AgentTaskResponse:
+        task_id = self._new_task_id()
+        timestamp = datetime.now(timezone.utc).isoformat()
+        task = {
+            "task_id": task_id,
+            "request": request.request,
+            "status": AgentTaskStatus.FAILED.value,
+            "permission_level": int(request.permission_level),
+            "plan": [
+                "요청에 포함된 경로를 Agent 안전성 규칙으로 검사합니다.",
+                f"요청을 거부합니다: {message}",
+                "파일 또는 명령을 실행하지 않고 거부 결과를 작업 기록에 저장합니다.",
+            ],
+            "required_tools": [],
+            "actions": [],
+            "requires_approval": False,
+            "approved": False,
+            "workspace": str(self.permissions.workspace),
+            "created_at": timestamp,
+            "started_at": None,
+            "completed_at": timestamp,
+            "current_action": None,
+            "progress_step": 0,
+            "progress_total": 0,
+            "tools_used": [],
+            "read_files": [],
+            "created_files": [],
+            "modified_files": [],
+            "backups": [],
+            "execution_records": [],
+            "results": [],
+            "error": message,
+            "cancel_requested": False,
+        }
+        self._write_task(task)
+        return AgentTaskResponse.model_validate(task)
 
     def _cancel_requested(self, task_id: str) -> bool:
         try:
