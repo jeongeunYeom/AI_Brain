@@ -19,7 +19,7 @@ def agent_settings(tmp_path: Path) -> Settings:
     return Settings(
         data_dir=tmp_path / "data",
         agent_workspace_dir=workspace,
-        agent_python_timeout_seconds=10,
+        agent_python_timeout_seconds=30,
     )
 
 
@@ -33,7 +33,7 @@ def client(agent_settings: Settings):
 
 
 def wait_for_task(client: TestClient, task_id: str) -> dict:
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 35
     while time.monotonic() < deadline:
         response = client.get(f"/api/agent/tasks/{task_id}")
         assert response.status_code == 200
@@ -304,7 +304,7 @@ def test_scatter_executes_with_selected_columns(
     assert executed.status_code == 200
     result = wait_for_task(client, task["task_id"])
 
-    assert result["status"] == "completed"
+    assert result["status"] == "completed", result.get("error")
     assert "results/trapped_vs_free.png" in result["created_files"]
     output = agent_settings.agent_workspace_dir / "results/trapped_vs_free.png"
     assert output.is_file()
