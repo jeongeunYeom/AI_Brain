@@ -1,4 +1,6 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000/api";
+import { API_BASE, requestJson } from "./http";
+
+export { API_BASE };
 
 export type Source = {
   document: string;
@@ -58,12 +60,6 @@ export type SystemStatus = {
   };
 };
 
-export async function getSystemStatus(): Promise<SystemStatus> {
-  const response = await fetch(`${API_BASE}/system/checklist`, { cache: "no-store" });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
-}
-
 export type UploadJob = {
   job_id: string;
   step: number;
@@ -73,66 +69,71 @@ export type UploadJob = {
   error?: string | null;
 };
 
-export async function createUploadJob(): Promise<{ job_id: string }> {
-  const response = await fetch(`${API_BASE}/jobs`, { method: "POST" });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
+export function getSystemStatus(): Promise<SystemStatus> {
+  return requestJson("/system/checklist", { cache: "no-store" });
 }
 
-export async function getUploadJob(jobId: string): Promise<UploadJob> {
-  const response = await fetch(`${API_BASE}/jobs/${jobId}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
+export function createUploadJob(): Promise<{ job_id: string }> {
+  return requestJson("/jobs", { method: "POST" });
 }
 
-export async function uploadDocument(file: File, analyzeFigures: boolean, jobId?: string) {
+export function getUploadJob(jobId: string): Promise<UploadJob> {
+  return requestJson(`/jobs/${jobId}`, { cache: "no-store" });
+}
+
+export function uploadDocument(
+  file: File,
+  analyzeFigures: boolean,
+  jobId?: string,
+) {
   const form = new FormData();
   form.append("file", file);
-  const suffix = jobId ? `&job_id=${jobId}` : "";
-  const response = await fetch(`${API_BASE}/documents/upload?analyze_figures=${analyzeFigures}${suffix}`, {
-    method: "POST",
-    body: form
+
+  const query = new URLSearchParams({
+    analyze_figures: String(analyzeFigures),
   });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  if (jobId) query.set("job_id", jobId);
+
+  return requestJson(`/documents/upload?${query}`, {
+    method: "POST",
+    body: form,
+  });
 }
 
-export async function askQuestion(
+export function askQuestion(
   question: string,
   model = "qwen3:8b",
 ): Promise<ChatResponse> {
-  const response = await fetch(`${API_BASE}/chat`, {
+  return requestJson("/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, model })
+    body: JSON.stringify({ question, model }),
   });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
 }
 
-export async function askComparison(
+export function askComparison(
   question: string,
   models = ["qwen3:8b", "gemma4:latest"],
 ): Promise<ChatCompareResponse> {
-  const response = await fetch(`${API_BASE}/chat/compare`, {
+  return requestJson("/chat/compare", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, models })
+    body: JSON.stringify({ question, models }),
   });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
 }
 
-export async function analyzeImage(file: File) {
+export function analyzeImage(file: File) {
   const form = new FormData();
   form.append("file", file);
-  const response = await fetch(`${API_BASE}/vision/analyze`, { method: "POST", body: form });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
+
+  return requestJson("/vision/analyze", {
+    method: "POST",
+    body: form,
+  });
 }
 
-export async function createDemoPlot() {
-  const response = await fetch(`${API_BASE}/plots`, {
+export function createDemoPlot() {
+  return requestJson("/plots", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -141,9 +142,7 @@ export async function createDemoPlot() {
       y_label: "Bottomhole pressure, Pwf (psi)",
       x: [0, 200, 400, 600, 800, 1000],
       y: [3200, 2950, 2600, 2100, 1450, 700],
-      chart_type: "line"
-    })
+      chart_type: "line",
+    }),
   });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
 }
