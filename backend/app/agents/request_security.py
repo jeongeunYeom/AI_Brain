@@ -7,6 +7,10 @@ from app.agents.permission_manager import AgentSecurityError
 from app.models.agent_schemas import AgentPlanRequest
 
 
+class AgentRequestRejected(AgentSecurityError):
+    """An unsafe user-supplied path was rejected before planning."""
+
+
 _URL_PATTERN = re.compile(r"(?i)\b(?:https?|ftp|file)://")
 _WINDOWS_ABSOLUTE_PATTERN = re.compile(
     r"(?i)(?:^|[\s\"'`(])(?:[a-z]:[\\/]|\\\\)"
@@ -41,7 +45,7 @@ def validate_agent_plan_request(request: AgentPlanRequest) -> None:
 def _validate_request_text(value: str) -> None:
     text = _normalize(value)
     if _URL_PATTERN.search(text):
-        raise AgentSecurityError(
+        raise AgentRequestRejected(
             "인터넷 URL에는 접근할 수 없습니다. workspace 내부 파일을 사용하세요."
         )
     if (
@@ -50,12 +54,12 @@ def _validate_request_text(value: str) -> None:
         or _TRAVERSAL_PATTERN.search(text)
         or _HOME_PATTERN.search(text)
     ):
-        raise AgentSecurityError(
+        raise AgentRequestRejected(
             "Agent workspace 밖의 경로에는 접근할 수 없습니다. "
             "workspace 내부의 상대경로만 사용하세요."
         )
     if _SENSITIVE_PATTERN.search(text):
-        raise AgentSecurityError(
+        raise AgentRequestRejected(
             "환경설정, 인증키 또는 비밀정보 파일에는 접근할 수 없습니다."
         )
 
@@ -66,7 +70,7 @@ def _validate_explicit_path(label: str, value: str | None) -> None:
 
     path_text = _normalize(value.strip())
     if _URL_PATTERN.search(path_text):
-        raise AgentSecurityError(f"{label}에는 인터넷 URL을 사용할 수 없습니다.")
+        raise AgentRequestRejected(f"{label}에는 인터넷 URL을 사용할 수 없습니다.")
 
     windows_path = PureWindowsPath(path_text)
     posix_path = PurePosixPath(path_text.replace("\\", "/"))
@@ -78,13 +82,13 @@ def _validate_explicit_path(label: str, value: str | None) -> None:
         or path_text.startswith(("\\\\", "~\\", "~/"))
         or ".." in path_parts
     ):
-        raise AgentSecurityError(
+        raise AgentRequestRejected(
             "Agent workspace 밖의 경로에는 접근할 수 없습니다. "
             "workspace 내부의 상대경로만 사용하세요."
         )
 
     if _SENSITIVE_PATTERN.search(f"/{path_text}"):
-        raise AgentSecurityError(
+        raise AgentRequestRejected(
             "환경설정, 인증키 또는 비밀정보 파일에는 접근할 수 없습니다."
         )
 
