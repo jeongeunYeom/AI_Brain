@@ -13,14 +13,22 @@ ENV_FILE = PROJECT_ROOT / ".env"
 load_dotenv(ENV_FILE)
 
 
-def resolve_data_dir(value: str | None = None) -> Path:
-    raw_value = value or os.getenv("DATA_DIR") or "data"
-    path = Path(raw_value).expanduser()
-
+def _resolve_project_path(value: str | None, default: str) -> Path:
+    path = Path(value or default).expanduser()
     if not path.is_absolute():
         path = PROJECT_ROOT / path
-
     return path.resolve()
+
+
+def resolve_data_dir(value: str | None = None) -> Path:
+    return _resolve_project_path(value or os.getenv("DATA_DIR"), "data")
+
+
+def resolve_agent_workspace_dir(value: str | None = None) -> Path:
+    return _resolve_project_path(
+        value or os.getenv("AGENT_WORKSPACE_DIR"),
+        "workspace",
+    )
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,7 @@ class Settings:
     app_name: str = "Petroleum Engineering AI Agent"
 
     data_dir: Path = field(default_factory=resolve_data_dir)
+    agent_workspace_dir: Path = field(default_factory=resolve_agent_workspace_dir)
 
     ollama_base_url: str = field(
         default_factory=lambda: os.getenv(
@@ -177,6 +186,36 @@ class Settings:
         )
     )
 
+    agent_max_file_bytes: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGENT_MAX_FILE_BYTES", str(5 * 1024 * 1024))
+        )
+    )
+
+    agent_max_read_characters: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGENT_MAX_READ_CHARACTERS", "50000")
+        )
+    )
+
+    agent_python_timeout_seconds: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGENT_PYTHON_TIMEOUT_SECONDS", "30")
+        )
+    )
+
+    agent_python_max_code_characters: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGENT_PYTHON_MAX_CODE_CHARACTERS", "30000")
+        )
+    )
+
+    agent_python_output_characters: int = field(
+        default_factory=lambda: int(
+            os.getenv("AGENT_PYTHON_OUTPUT_CHARACTERS", "20000")
+        )
+    )
+
     @property
     def raw_dir(self) -> Path:
         return self.data_dir / "raw"
@@ -212,10 +251,14 @@ class Settings:
     @property
     def evaluation_dir(self) -> Path:
         return self.data_dir / "evaluation"
-    
+
     @property
     def agent_runs_dir(self) -> Path:
         return self.data_dir / "agent_runs"
+
+    @property
+    def agent_backups_dir(self) -> Path:
+        return self.data_dir / "agent_backups"
 
 
 @lru_cache(maxsize=1)
@@ -233,6 +276,8 @@ def get_settings() -> Settings:
         settings.metadata_dir,
         settings.evaluation_dir,
         settings.agent_runs_dir,
+        settings.agent_backups_dir,
+        settings.agent_workspace_dir,
     ]:
         directory.mkdir(
             parents=True,
