@@ -39,4 +39,8 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
       - name: Build frontend
-        run: pnpm build
+        run: |
+          pnpm build > build.log 2>&1 || {
+            tail -n 120 build.log
+            exit 1
+          }
