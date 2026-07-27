@@ -19,7 +19,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Install backend dependencies
         run: python -m pip install -q -r requirements.txt
-      - name: Run refactor regression tests
+      - name: Run refactor and Agent regression tests
         env:
           PYTHONPATH: .
         run: >-
@@ -27,6 +27,8 @@ jobs:
           tests/test_api_routes.py
           tests/test_figure_preview.py
           tests/test_benchmark_dashboard.py
+          tests/test_agent_api.py
+          tests/test_agent_tools.py
       - name: Run full backend suite (informational)
         id: full-suite
         continue-on-error: true
