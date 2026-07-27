@@ -13,7 +13,10 @@ from app.agents.permission_manager import (
     AgentSecurityError,
     PermissionManager,
 )
-from app.agents.request_security import validate_agent_plan_request
+from app.agents.request_security import (
+    AgentRequestRejected,
+    validate_agent_plan_request,
+)
 from app.agents.tool_registry import ToolRegistry
 from app.core.config import Settings
 from app.models.agent_schemas import (
@@ -52,10 +55,10 @@ class AgentService:
     def create_plan(self, request: AgentPlanRequest) -> AgentTaskResponse:
         try:
             validate_agent_plan_request(request)
-            planned = self.planner.plan(request)
-        except AgentSecurityError as exc:
+        except AgentRequestRejected as exc:
             return self._record_rejected_plan(request, str(exc))
 
+        planned = self.planner.plan(request)
         for action in planned.actions:
             self.permissions.require_tool_level(request.permission_level, action.tool)
         task_id = self._new_task_id()
