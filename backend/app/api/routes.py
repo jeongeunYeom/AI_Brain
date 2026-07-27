@@ -5,6 +5,7 @@ import json
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
+from app.api.evaluation import router as evaluation_router
 from app.core.config import Settings, get_settings
 from app.core.error_mapping import ExternalServiceError
 from app.core.errors import to_http_exception
@@ -28,12 +29,9 @@ from app.services.plots import build_plot
 from app.services.qa import QAService
 from app.services.system_status import build_checklist
 from app.services.vector_store import VectorStore
-from app.services.benchmark_dashboard import (
-    BenchmarkDashboardService,
-    BenchmarkRunNotFound,
-)
 
 router = APIRouter()
+router.include_router(evaluation_router)
 
 
 @lru_cache(maxsize=1)
@@ -73,44 +71,6 @@ async def health(settings: Settings = Depends(get_settings), ollama: OllamaClien
 @router.get("/system/checklist")
 async def system_checklist(settings: Settings = Depends(get_settings), ollama: OllamaClient = Depends(get_ollama)) -> dict:
     return await build_checklist(settings, ollama)
-
-
-@router.get("/evaluation/runs")
-async def list_evaluation_runs(
-    limit: int = Query(default=50, ge=1, le=200),
-    settings: Settings = Depends(get_settings),
-) -> list[dict]:
-    service = BenchmarkDashboardService(settings)
-    return service.list_runs(limit=limit)
-
-
-@router.get("/evaluation/latest")
-async def latest_evaluation_run(
-    settings: Settings = Depends(get_settings),
-) -> dict:
-    service = BenchmarkDashboardService(settings)
-    try:
-        return service.get_latest()
-    except BenchmarkRunNotFound as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=str(exc),
-        ) from exc
-
-
-@router.get("/evaluation/runs/{run_id}")
-async def evaluation_run(
-    run_id: str,
-    settings: Settings = Depends(get_settings),
-) -> dict:
-    service = BenchmarkDashboardService(settings)
-    try:
-        return service.get_run(run_id)
-    except BenchmarkRunNotFound as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=str(exc),
-        ) from exc
 
 
 @router.post("/jobs", status_code=201)
@@ -307,6 +267,7 @@ async def analyze_image(
 async def create_plot(request: PlotRequest) -> PlotResponse:
     return PlotResponse(figure=build_plot(request))
 
+
 def _review_service(settings: Settings) -> FigureReviewService:
     return FigureReviewService(settings)
 
@@ -429,4 +390,3 @@ async def figure_review_audit(
     settings: Settings = Depends(get_settings),
 ) -> list[dict]:
     return _review_service(settings).recent_audit(limit)
-
