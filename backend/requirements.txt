@@ -9,4 +9,5 @@ PyMuPDF==1.25.1
 pdfplumber==0.11.5
 Pillow==11.1.0
 plotly==5.24.1
+matplotlib==3.10.0
 pytest==8.3.4

@@ -34,6 +34,10 @@ models/
 cache/
 .cache/
 
+# Agent workspace contents
+workspace/*
+!workspace/README.md
+
 # Large model files
 *.gguf
 *.safetensors
