@@ -44,3 +44,10 @@ jobs:
             tail -n 100 build.log
             exit 1
           }
+      - name: Upload frontend build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-log
+          path: frontend/build.log
+          if-no-files-found: ignore
