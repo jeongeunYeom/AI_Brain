@@ -7,6 +7,7 @@ import pytest
 from app.agents.permission_manager import AgentSecurityError, PermissionManager
 from app.core.config import Settings
 from app.tools.file_tools import FileTools
+from app.tools.python_tools import PythonTools
 
 
 def test_sensitive_files_are_blocked(tmp_path: Path) -> None:
@@ -35,3 +36,32 @@ def test_create_file_never_overwrites(tmp_path: Path) -> None:
     with pytest.raises(FileExistsError):
         files.create_file("report.txt", "replacement")
     assert target.read_text(encoding="utf-8") == "original"
+
+
+def test_python_blocks_indirect_module_access(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        agent_workspace_dir=tmp_path / "workspace",
+    )
+    settings.agent_workspace_dir.mkdir(parents=True)
+    python = PythonTools(settings, PermissionManager(settings))
+
+    with pytest.raises(AgentSecurityError):
+        python.validate(
+            "import matplotlib.pyplot as plt\n"
+            "print(plt.sys.modules['subprocess'])"
+        )
+
+
+def test_python_blocks_absolute_paths_and_urls(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        agent_workspace_dir=tmp_path / "workspace",
+    )
+    settings.agent_workspace_dir.mkdir(parents=True)
+    python = PythonTools(settings, PermissionManager(settings))
+
+    with pytest.raises(AgentSecurityError):
+        python.validate("open('/etc/passwd').read()")
+    with pytest.raises(AgentSecurityError):
+        python.validate("print('https://example.com/data.csv')")
