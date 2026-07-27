@@ -69,6 +69,43 @@ export type UploadJob = {
   error?: string | null;
 };
 
+export type DocumentRecord = {
+  document_id: string;
+  filename: string;
+  sha256: string;
+  status: string;
+  pages: number;
+  chunks: number;
+  figures: number;
+  figures_analyzed: number;
+  figures_valid: number;
+  figures_review_required: number;
+  figures_failed: number;
+  figures_ignored: number;
+  figure_vision_calls: number;
+  title?: string | null;
+  document_type?: string | null;
+  contents_pages: number[];
+  title_pages: number[];
+};
+
+export type UploadResponse = {
+  document: DocumentRecord;
+  skipped: boolean;
+};
+
+export type VisionResponse = {
+  filename: string;
+  analysis: string;
+};
+
+export type PlotResponse = {
+  figure: {
+    data?: Plotly.Data[];
+    layout?: Partial<Plotly.Layout>;
+  };
+};
+
 export function getSystemStatus(): Promise<SystemStatus> {
   return requestJson("/system/checklist", { cache: "no-store" });
 }
@@ -85,7 +122,7 @@ export function uploadDocument(
   file: File,
   analyzeFigures: boolean,
   jobId?: string,
-) {
+): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
 
@@ -122,7 +159,7 @@ export function askComparison(
   });
 }
 
-export function analyzeImage(file: File) {
+export function analyzeImage(file: File): Promise<VisionResponse> {
   const form = new FormData();
   form.append("file", file);
 
@@ -132,7 +169,7 @@ export function analyzeImage(file: File) {
   });
 }
 
-export function createDemoPlot() {
+export function createDemoPlot(): Promise<PlotResponse> {
   return requestJson("/plots", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
