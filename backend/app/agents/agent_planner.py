@@ -30,6 +30,45 @@ AGENT_SYSTEM_PROMPT = """당신은 석유공학 연구지원 Agent이다.
 """
 
 
+_COLUMN_ALIASES = {
+    "srco2": (
+        "srco2",
+        "residual co2 saturation",
+        "잔류 co2 포화도",
+        "잔류 이산화탄소 포화도",
+        "잔류 포화도",
+    ),
+    "trapped_ratio": (
+        "trapped_ratio",
+        "trapped ratio",
+        "trapped co2 ratio",
+        "포획된 co2 비율",
+        "포획 co2 비율",
+        "포획된 이산화탄소 비율",
+        "포획 이산화탄소 비율",
+        "포획된 비율",
+        "포획 비율",
+    ),
+    "free_ratio": (
+        "free_ratio",
+        "free ratio",
+        "free co2 ratio",
+        "자유 상태 co2 비율",
+        "자유 co2 비율",
+        "자유 상태 이산화탄소 비율",
+        "자유 이산화탄소 비율",
+        "자유 상태 비율",
+        "자유 비율",
+    ),
+    "total_storage_mt": (
+        "total_storage_mt",
+        "total storage",
+        "총 저장량",
+        "전체 저장량",
+    ),
+}
+
+
 @dataclass
 class PlannedTask:
     plan: list[str]
@@ -117,12 +156,15 @@ class AgentPlanner:
                 allow_directory=False,
                 allowed_extensions={".png"},
             )
-            code = self._scatter_code(csv_path, output_path)
+            csv_info = self._csv_info(csv_path)
+            x_name, y_name = self._select_scatter_columns(request, text, csv_info)
+            code = self._scatter_code(csv_path, output_path, x_name, y_name)
             self.python_tools.validate(code)
             return PlannedTask(
                 plan=[
                     f"{csv_path}의 열 구조와 데이터 개수를 확인합니다.",
-                    "숫자로 변환 가능한 두 열을 선택하고 결측값을 제외합니다.",
+                    f"X축은 {x_name}, Y축은 {y_name} 열로 확정합니다.",
+                    "두 열의 숫자 데이터에서 결측값과 변환 불가능한 행을 제외합니다.",
                     "승인 후 Python으로 산점도를 생성합니다.",
                     f"그래프를 {output_path}에 저장하고 결과를 검증합니다.",
                 ],
@@ -135,8 +177,12 @@ class AgentPlanner:
                     ),
                     self._action(
                         AgentToolName.RUN_PYTHON,
-                        "CSV 숫자 열 산점도 생성",
-                        {"code": code},
+                        f"{x_name}와 {y_name} 열의 산점도 생성",
+                        {
+                            "code": code,
+                            "x_column": x_name,
+                            "y_column": y_name,
+                        },
                         target_files=[csv_path, output_path],
                         requires_approval=True,
                         preview=code,
@@ -285,6 +331,132 @@ class AgentPlanner:
             path = self.permissions.find_first_file(".csv")
         return self.permissions.to_relative(path)
 
+    def _csv_info(self, csv_path: str) -> dict:
+        result = self.file_tools.read_file(csv_path, start_line=1, end_line=6)
+        csv_info = result.get("csv")
+        if not csv_info or not csv_info.get("columns"):
+            raise ValueError("CSV에 열 이름이 없습니다.")
+        if csv_info.get("row_count", 0) == 0:
+            raise ValueError("CSV에 데이터 행이 없습니다.")
+        return csv_info
+
+    def _select_scatter_columns(
+        self,
+        request: AgentPlanRequest,
+        text: str,
+        csv_info: dict,
+    ) -> tuple[str, str]:
+        columns = [str(column) for column in csv_info["columns"]]
+        explicit_x = (request.x_column or "").strip()
+        explicit_y = (request.y_column or "").strip()
+
+        if bool(explicit_x) != bool(explicit_y):
+            raise ValueError("산점도에는 X축과 Y축 열을 모두 선택해야 합니다.")
+
+        if explicit_x and explicit_y:
+            x_name = self._resolve_column_name(explicit_x, columns)
+            y_name = self._resolve_column_name(explicit_y, columns)
+            self._validate_distinct_columns(x_name, y_name)
+            self._validate_numeric_samples(x_name, y_name, csv_info)
+            return x_name, y_name
+
+        mentioned = self._mentioned_columns(text, columns)
+        if len(mentioned) >= 2:
+            x_name, y_name = mentioned[:2]
+            self._validate_distinct_columns(x_name, y_name)
+            self._validate_numeric_samples(x_name, y_name, csv_info)
+            return x_name, y_name
+
+        numeric = self._numeric_sample_columns(csv_info)
+        if len(numeric) < 2:
+            raise ValueError(
+                "산점도에 사용할 숫자 열이 2개 이상 필요합니다. "
+                f"사용 가능한 열: {', '.join(columns)}"
+            )
+        return numeric[0], numeric[1]
+
+    @staticmethod
+    def _resolve_column_name(requested: str, columns: list[str]) -> str:
+        lookup = {column.casefold(): column for column in columns}
+        matched = lookup.get(requested.casefold())
+        if matched is None:
+            raise ValueError(
+                f"CSV에 '{requested}' 열이 없습니다. "
+                f"사용 가능한 열: {', '.join(columns)}"
+            )
+        return matched
+
+    @classmethod
+    def _mentioned_columns(cls, text: str, columns: list[str]) -> list[str]:
+        normalized_text = cls._normalize_column_text(text)
+        matches: list[tuple[int, str]] = []
+        for column in columns:
+            positions: list[int] = []
+            candidates = {
+                column,
+                column.replace("_", " "),
+                column.replace("_", ""),
+            }
+            candidates.update(_COLUMN_ALIASES.get(column.casefold(), ()))
+            for candidate in candidates:
+                normalized_candidate = cls._normalize_column_text(candidate)
+                if not normalized_candidate:
+                    continue
+                position = normalized_text.find(normalized_candidate)
+                if position >= 0:
+                    positions.append(position)
+            if positions:
+                matches.append((min(positions), column))
+        matches.sort(key=lambda item: item[0])
+        return [column for _, column in matches]
+
+    @staticmethod
+    def _normalize_column_text(value: str) -> str:
+        lowered = value.casefold().replace("co₂", "co2")
+        return re.sub(r"[\s_\-]+", " ", lowered).strip()
+
+    @staticmethod
+    def _numeric_sample_columns(csv_info: dict) -> list[str]:
+        columns = [str(column) for column in csv_info["columns"]]
+        sample_rows = csv_info.get("sample_rows") or []
+        numeric: list[str] = []
+        for index, column in enumerate(columns):
+            values = 0
+            for row in sample_rows:
+                if index >= len(row):
+                    continue
+                raw = str(row[index]).strip()
+                if not raw:
+                    continue
+                try:
+                    float(raw)
+                except ValueError:
+                    continue
+                values += 1
+            if values > 0:
+                numeric.append(column)
+        return numeric
+
+    @classmethod
+    def _validate_numeric_samples(
+        cls,
+        x_name: str,
+        y_name: str,
+        csv_info: dict,
+    ) -> None:
+        numeric = set(cls._numeric_sample_columns(csv_info))
+        invalid = [name for name in (x_name, y_name) if name not in numeric]
+        if invalid:
+            raise ValueError(
+                "선택한 열에서 숫자 데이터를 확인할 수 없습니다: "
+                + ", ".join(invalid)
+            )
+
+    @staticmethod
+    def _validate_distinct_columns(x_name: str, y_name: str) -> None:
+        if x_name == y_name:
+            raise ValueError("X축과 Y축에는 서로 다른 열을 선택해야 합니다.")
+
     @staticmethod
     def _extract_path(text: str) -> str | None:
         quoted = re.findall(r"[\"'`](.+?)[\"'`]", text)
@@ -416,7 +588,12 @@ class AgentPlanner:
         ).strip()
 
     @staticmethod
-    def _scatter_code(csv_path: str, output_path: str) -> str:
+    def _scatter_code(
+        csv_path: str,
+        output_path: str,
+        x_name: str,
+        y_name: str,
+    ) -> str:
         return textwrap.dedent(
             f"""
             import csv
@@ -424,6 +601,8 @@ class AgentPlanner:
 
             input_path = {csv_path!r}
             output_path = {output_path!r}
+            x_name = {x_name!r}
+            y_name = {y_name!r}
 
             with open(input_path, "r", encoding="utf-8-sig", newline="") as handle:
                 rows = list(csv.DictReader(handle))
@@ -432,30 +611,23 @@ class AgentPlanner:
                 raise ValueError("CSV에 데이터 행이 없습니다.")
 
             columns = list(rows[0].keys())
-            numeric = []
-            for column in columns:
-                converted = []
-                for row in rows:
-                    raw = (row.get(column) or "").strip()
-                    try:
-                        converted.append(float(raw))
-                    except ValueError:
-                        continue
-                if len(converted) >= 2:
-                    numeric.append(column)
+            missing_columns = [name for name in (x_name, y_name) if name not in columns]
+            if missing_columns:
+                raise ValueError("CSV 열을 찾을 수 없습니다: " + ", ".join(missing_columns))
 
-            if len(numeric) < 2:
-                raise ValueError("산점도에 사용할 숫자 열이 2개 이상 필요합니다.")
-
-            x_name, y_name = numeric[:2]
             x_values = []
             y_values = []
             for row in rows:
                 try:
-                    x_values.append(float((row.get(x_name) or "").strip()))
-                    y_values.append(float((row.get(y_name) or "").strip()))
+                    x_value = float((row.get(x_name) or "").strip())
+                    y_value = float((row.get(y_name) or "").strip())
                 except ValueError:
                     continue
+                x_values.append(x_value)
+                y_values.append(y_value)
+
+            if not x_values:
+                raise ValueError("선택한 두 열에 함께 사용할 수 있는 숫자 행이 없습니다.")
 
             plt.figure(figsize=(8, 5))
             plt.scatter(x_values, y_values)
@@ -464,6 +636,8 @@ class AgentPlanner:
             plt.title(f"{{y_name}} vs {{x_name}}")
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
+            with open(output_path, "wb"):
+                pass
             plt.savefig(output_path, dpi=160)
             plt.close()
             print(f"Saved scatter plot: {{output_path}}")

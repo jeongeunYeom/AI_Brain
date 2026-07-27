@@ -164,6 +164,16 @@ class AgentService:
     def list_workspace(self, path: str = ".") -> dict:
         return self.tools.directory_tools.list_directory(path)
 
+    def get_csv_columns(self, path: str) -> dict:
+        result = self.tools.file_tools.read_file(path, start_line=1, end_line=5)
+        csv_info = result.get("csv")
+        if csv_info is None:
+            raise AgentSecurityError("CSV 파일 경로가 필요합니다.")
+        return {
+            "path": result["path"],
+            "columns": csv_info["columns"],
+        }
+
     def _record_rejected_plan(
         self,
         request: AgentPlanRequest,

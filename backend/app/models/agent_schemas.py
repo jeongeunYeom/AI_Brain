@@ -42,6 +42,8 @@ class AgentPlanRequest(BaseModel):
     request: str = Field(min_length=1, max_length=4000)
     target_path: str | None = Field(default=None, max_length=500)
     output_path: str | None = Field(default=None, max_length=500)
+    x_column: str | None = Field(default=None, max_length=200)
+    y_column: str | None = Field(default=None, max_length=200)
     content: str | None = Field(default=None, max_length=100_000)
     old_text: str | None = Field(default=None, max_length=50_000)
     new_text: str | None = Field(default=None, max_length=50_000)
@@ -93,3 +95,8 @@ class AgentWorkspaceEntry(BaseModel):
 class AgentWorkspaceResponse(BaseModel):
     path: str
     entries: list[AgentWorkspaceEntry]
+
+
+class AgentCsvColumnsResponse(BaseModel):
+    path: str
+    columns: list[str]

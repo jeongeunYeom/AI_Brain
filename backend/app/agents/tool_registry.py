@@ -27,5 +27,8 @@ class ToolRegistry:
         if action.tool == AgentToolName.EDIT_FILE:
             return self.file_tools.edit_file(task_id=task_id, **args)
         if action.tool == AgentToolName.RUN_PYTHON:
-            return self.python_tools.run_python(task_id=task_id, **args)
+            code = args.get("code")
+            if not isinstance(code, str):
+                raise ValueError("run_python requires a code string.")
+            return self.python_tools.run_python(code, task_id=task_id)
         raise ValueError(f"Unknown Agent tool: {action.tool}")
