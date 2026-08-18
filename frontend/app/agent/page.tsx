@@ -3,11 +3,14 @@
 import { useEffect, useState } from "react";
 import {
   AgentPermissionLevel,
+  AgentFilePreview,
   AgentTask,
   cancelAgentTask,
   createAgentPlan,
   executeAgentTask,
   getAgentCsvColumns,
+  getAgentFilePreview,
+  getAgentFileUrl,
   getAgentTask,
   listAgentWorkspace,
   WorkspaceEntry,
@@ -48,6 +51,20 @@ export default function AgentPage() {
   const [workspacePath, setWorkspacePath] = useState(".");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<AgentFilePreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  async function openPreview(path: string) {
+    setPreviewLoading(true);
+    setError(null);
+    try {
+      setPreview(await getAgentFilePreview(path));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "파일을 미리 볼 수 없습니다.");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
 
   async function refreshWorkspace(path = workspacePath) {
     try {
@@ -464,7 +481,7 @@ export default function AgentPage() {
                       <h3 className="font-black">작업 결과</h3>
                       {task.error && <p className="text-red-700">오류: {task.error}</p>}
                       <ResultList title="읽은 파일" values={task.read_files} />
-                      <ResultList title="생성된 파일" values={task.created_files} />
+                      <ResultFiles title="생성된 파일" values={task.created_files} onPreview={openPreview} previewLoading={previewLoading} />
                       <ResultList title="수정된 파일" values={task.modified_files} />
                       <ResultList title="백업" values={task.backups} />
                       {task.results.map((item) => (
@@ -532,7 +549,61 @@ export default function AgentPage() {
           </section>
         </div>
       </div>
+      {preview && <FilePreviewModal preview={preview} onClose={() => setPreview(null)} />}
     </main>
+  );
+}
+
+function ResultFiles({ title, values, onPreview, previewLoading }: {
+  title: string;
+  values: string[];
+  onPreview: (path: string) => void;
+  previewLoading: boolean;
+}) {
+  if (values.length === 0) return null;
+  return (
+    <div>
+      <p className="text-xs font-bold text-slate-500">{title}</p>
+      <div className="mt-2 space-y-2">
+        {values.map((value) => (
+          <div key={value} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3">
+            <span className="break-all font-mono text-xs">📄 {value}</span>
+            <span className="flex gap-2">
+              <button type="button" disabled={previewLoading} onClick={() => onPreview(value)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-indigo-700 disabled:opacity-40">미리보기</button>
+              <a href={getAgentFileUrl(value, true)} className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-bold text-white">다운로드</a>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FilePreviewModal({ preview, onClose }: { preview: AgentFilePreview; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" onClick={onClose}>
+      <section className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+          <div className="min-w-0"><h3 className="font-black">결과 파일 미리보기</h3><p className="truncate text-xs text-slate-500">{preview.path}</p></div>
+          <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold">닫기</button>
+        </header>
+        <div className="max-h-[72vh] overflow-auto p-5">
+          {preview.kind === "image" && <img src={getAgentFileUrl(preview.path)} alt={preview.path} className="mx-auto max-h-[65vh] max-w-full rounded-xl border border-slate-200 object-contain" />}
+          {preview.kind === "text" && <pre className="whitespace-pre-wrap rounded-xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">{preview.content}</pre>}
+          {preview.kind === "csv" && (
+            <div>
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="bg-slate-100"><tr>{preview.columns.map((column, index) => <th key={`${index}:${column}`} className="whitespace-nowrap px-3 py-2 font-black">{column}</th>)}</tr></thead>
+                  <tbody>{preview.rows.map((row, rowIndex) => <tr key={rowIndex} className="border-t border-slate-100">{row.map((cell, cellIndex) => <td key={cellIndex} className="whitespace-nowrap px-3 py-2">{cell}</td>)}</tr>)}</tbody>
+                </table>
+              </div>
+              {preview.truncated && <p className="mt-3 text-xs text-amber-700">처음 100개 행만 표시합니다.</p>}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
 

@@ -1,4 +1,4 @@
-import { requestJson } from "./http";
+import { API_BASE, requestJson } from "./http";
 
 export type AgentPermissionLevel = 1 | 2 | 3;
 export type AgentTaskStatus =
@@ -90,6 +90,11 @@ export type CsvColumnsResponse = {
   columns: string[];
 };
 
+export type AgentFilePreview =
+  | { path: string; kind: "image" }
+  | { path: string; kind: "text"; content: string }
+  | { path: string; kind: "csv"; columns: string[]; rows: string[][]; truncated: boolean };
+
 export function createAgentPlan(input: AgentPlanInput): Promise<AgentTask> {
   return requestJson("/agent/plan", {
     method: "POST",
@@ -125,4 +130,14 @@ export function listAgentWorkspace(path = "."): Promise<WorkspaceListing> {
 export function getAgentCsvColumns(path: string): Promise<CsvColumnsResponse> {
   const query = new URLSearchParams({ path });
   return requestJson(`/agent/csv-columns?${query}`, { cache: "no-store" });
+}
+
+export function getAgentFilePreview(path: string): Promise<AgentFilePreview> {
+  const query = new URLSearchParams({ path });
+  return requestJson(`/agent/files/preview?${query}`, { cache: "no-store" });
+}
+
+export function getAgentFileUrl(path: string, download = false): string {
+  const query = new URLSearchParams({ path, download: String(download) });
+  return `${API_BASE}/agent/files/content?${query}`;
 }
