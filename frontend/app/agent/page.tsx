@@ -272,175 +272,34 @@ export default function AgentPage() {
           </div>
         </header>
 
-        <div className="grid gap-5 xl:grid-cols-[minmax(310px_.8fr)_minmax(420px_1.2fr)]">
-          <section className="space-y-5 rounded-2xl border border-slate-200 bg-slate-50/50 p-5">
-            <div>
-              <label className="text-sm font-bold">사용자 요청</label>
-              <textarea
-                value={request}
-                onChange={(event) => setRequest(event.target.value)}
-                rows={5}
-                placeholder="예: johansen_results.csv를 분석해서 산점도를 만들어줘."
-                className="mt-2 w-full resize-none rounded-2xl border border-slate-200 bg-white p-3 text-sm shadow-sm outline-none focus:border-emerald-400"
-              />
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="text-xs font-semibold text-slate-600">
-                대상 파일/폴더
-                <input
-                  value={targetPath}
-                  onChange={(event) => setTargetPath(event.target.value)}
-                  placeholder="예: data.csv 또는 scripts"
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-400"
-                />
-              </label>
-              <label className="text-xs font-semibold text-slate-600">
-                결과 파일 경로
-                <input
-                  value={outputPath}
-                  onChange={(event) => setOutputPath(event.target.value)}
-                  placeholder="예: results/report.txt"
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-400"
-                />
-              </label>
-            </div>
-
-            {isCsvTarget && (
-              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-bold text-indigo-950">산점도 열 선택</p>
-                    <p className="mt-1 text-xs text-indigo-700">
-                      비워두면 요청 문장에서 열을 인식하고, 찾지 못하면 숫자 열을 자동 선택합니다.
-                    </p>
-                  </div>
-                  {columnsLoading && (
-                    <span className="text-xs font-semibold text-indigo-600">열 불러오는 중...</span>
-                  )}
-                </div>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <label className="text-xs font-semibold text-slate-600">
-                    X축 열
-                    <select
-                      value={xColumn}
-                      onChange={(event) => setXColumn(event.target.value)}
-                      disabled={columnsLoading || csvColumns.length === 0}
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none disabled:opacity-50"
-                    >
-                      <option value="">자동 인식</option>
-                      {csvColumns.map((column) => (
-                        <option key={column} value={column} disabled={column === yColumn}>
-                          {column}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-xs font-semibold text-slate-600">
-                    Y축 열
-                    <select
-                      value={yColumn}
-                      onChange={(event) => setYColumn(event.target.value)}
-                      disabled={columnsLoading || csvColumns.length === 0}
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none disabled:opacity-50"
-                    >
-                      <option value="">자동 인식</option>
-                      {csvColumns.map((column) => (
-                        <option key={column} value={column} disabled={column === xColumn}>
-                          {column}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                {columnError && (
-                  <p className="mt-3 rounded-xl bg-red-50 p-3 text-xs text-red-700">
-                    CSV 열을 불러오지 못했습니다: {columnError}
-                  </p>
-                )}
-              </div>
-            )}
-
-            <label className="block text-xs font-semibold text-slate-600">
-              권한 단계
-              <select
-                value={permissionLevel}
-                onChange={(event) =>
-                  setPermissionLevel(Number(event.target.value) as AgentPermissionLevel)
-                }
-                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none"
-              >
-                <option value={1}>Level 1 · 읽기 전용</option>
-                <option value={2}>Level 2 · 새 파일 생성</option>
-                <option value={3}>Level 3 · 승인 기반 수정·Python 실행</option>
-              </select>
-            </label>
-
-            <details className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <summary className="cursor-pointer text-sm font-bold text-slate-700">
-                고급 입력: 파일 생성·부분 수정·Python 코드
-              </summary>
-              <div className="mt-4 space-y-3">
-                <label className="block text-xs font-semibold text-slate-600">
-                  새 파일 내용
-                  <textarea
-                    value={content}
-                    onChange={(event) => setContent(event.target.value)}
-                    rows={4}
-                    className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono text-xs outline-none"
-                  />
-                </label>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="text-xs font-semibold text-slate-600">
-                    기존 문구
-                    <textarea
-                      value={oldText}
-                      onChange={(event) => setOldText(event.target.value)}
-                      rows={3}
-                      className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono text-xs outline-none"
-                    />
-                  </label>
-                  <label className="text-xs font-semibold text-slate-600">
-                    새 문구
-                    <textarea
-                      value={newText}
-                      onChange={(event) => setNewText(event.target.value)}
-                      rows={3}
-                      className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono text-xs outline-none"
-                    />
-                  </label>
-                </div>
-                <label className="block text-xs font-semibold text-slate-600">
-                  실행할 Python 코드
-                  <textarea
-                    value={pythonCode}
-                    onChange={(event) => setPythonCode(event.target.value)}
-                    rows={8}
-                    placeholder="허용 모듈: csv, json, math, statistics, numpy, pandas, matplotlib 등"
-                    className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono text-xs outline-none"
-                  />
-                </label>
-              </div>
-            </details>
-
-            <button
-              type="button"
-              disabled={busy || !request.trim()}
-              onClick={makePlan}
-              className="w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {busy ? "처리 중..." : "1. 작업 계획 생성"}
-            </button>
-
-            {error && (
-              <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                {error}
-              </div>
-            )}
-          </section>
-
+        <div className="space-y-5 pb-48 sm:pb-44">
           <section className="space-y-5">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            {!task && (
+              <div className="flex items-start gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-xs font-black text-white">
+                  AI
+                </span>
+                <div className="max-w-2xl rounded-3xl rounded-tl-md border border-slate-200 bg-white px-5 py-4 text-sm leading-6 shadow-sm">
+                  <p className="font-black">어떤 연구 작업을 도와드릴까요?</p>
+                  <p className="mt-1 text-slate-500">
+                    아래 입력창에 요청을 적어주세요. 실행 전에 작업 계획과 대상 파일을 먼저 보여드릴게요.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {task && (
+              <div className="flex justify-end">
+                <div className="max-w-[82%] rounded-3xl rounded-br-md bg-indigo-600 px-5 py-3 text-sm leading-6 text-white shadow-sm">
+                  {task.request}
+                </div>
+              </div>
+            )}
+
+            <div className="relative ml-0 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:ml-12">
+              <span className="absolute -left-12 top-0 hidden h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-xs font-black text-white sm:flex">
+                AI
+              </span>
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="font-black">작업 계획과 승인</h2>
@@ -456,8 +315,8 @@ export default function AgentPage() {
               </div>
 
               {!task ? (
-                <p className="mt-6 rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">
-                  요청을 입력하고 작업 계획을 생성하세요.
+                <p className="mt-6 rounded-2xl bg-slate-50 p-5 text-sm text-slate-500">
+                  메시지를 보내면 이곳에 계획, 승인 버튼, 진행 상태와 결과가 대화 순서대로 표시됩니다.
                 </p>
               ) : (
                 <div className="mt-5 space-y-5">
@@ -618,6 +477,120 @@ export default function AgentPage() {
             </div>
           </section>
         </div>
+
+        <section className="fixed bottom-0 right-0 z-30 border-t border-slate-200 bg-white/95 px-4 pb-4 pt-3 shadow-[0_-12px_36px_rgba(15,23,42,0.08)] backdrop-blur md:left-[72px] lg:left-[356px] sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-6xl">
+            {error && (
+              <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700">
+                {error}
+              </div>
+            )}
+
+            <details className="group mb-2 rounded-2xl border border-slate-200 bg-white">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-2 text-xs font-bold text-slate-600">
+                <span>＋ 파일·출력·권한 설정</span>
+                <span className="font-normal text-slate-400">
+                  {targetPath || "대상 미지정"} · Level {permissionLevel}
+                </span>
+              </summary>
+              <div className="max-h-[52vh] space-y-4 overflow-y-auto border-t border-slate-100 p-4">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="text-xs font-semibold text-slate-600">
+                    대상 파일/폴더
+                    <input
+                      value={targetPath}
+                      onChange={(event) => setTargetPath(event.target.value)}
+                      placeholder="예: data.csv"
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    결과 파일 경로
+                    <input
+                      value={outputPath}
+                      onChange={(event) => setOutputPath(event.target.value)}
+                      placeholder="예: results/report.txt"
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    권한 단계
+                    <select
+                      value={permissionLevel}
+                      onChange={(event) => setPermissionLevel(Number(event.target.value) as AgentPermissionLevel)}
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none"
+                    >
+                      <option value={1}>Level 1 · 읽기</option>
+                      <option value={2}>Level 2 · 파일 생성</option>
+                      <option value={3}>Level 3 · 수정·Python</option>
+                    </select>
+                  </label>
+                </div>
+
+                {isCsvTarget && (
+                  <div className="rounded-2xl bg-indigo-50 p-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="text-xs font-semibold text-slate-600">
+                        X축 열
+                        <select value={xColumn} onChange={(event) => setXColumn(event.target.value)} disabled={columnsLoading || csvColumns.length === 0} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm disabled:opacity-50">
+                          <option value="">자동 인식</option>
+                          {csvColumns.map((column) => <option key={column} value={column} disabled={column === yColumn}>{column}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-xs font-semibold text-slate-600">
+                        Y축 열
+                        <select value={yColumn} onChange={(event) => setYColumn(event.target.value)} disabled={columnsLoading || csvColumns.length === 0} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm disabled:opacity-50">
+                          <option value="">자동 인식</option>
+                          {csvColumns.map((column) => <option key={column} value={column} disabled={column === xColumn}>{column}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    {columnsLoading && <p className="mt-2 text-xs text-indigo-600">CSV 열을 불러오는 중...</p>}
+                    {columnError && <p className="mt-2 text-xs text-red-700">{columnError}</p>}
+                  </div>
+                )}
+
+                <details className="rounded-xl bg-slate-50 p-3">
+                  <summary className="cursor-pointer text-xs font-bold text-slate-600">고급 입력</summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="text-xs font-semibold text-slate-600 sm:col-span-2">새 파일 내용<textarea value={content} onChange={(event) => setContent(event.target.value)} rows={3} className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono text-xs" /></label>
+                    <label className="text-xs font-semibold text-slate-600">기존 문구<textarea value={oldText} onChange={(event) => setOldText(event.target.value)} rows={3} className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono text-xs" /></label>
+                    <label className="text-xs font-semibold text-slate-600">새 문구<textarea value={newText} onChange={(event) => setNewText(event.target.value)} rows={3} className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono text-xs" /></label>
+                    <label className="text-xs font-semibold text-slate-600 sm:col-span-2">Python 코드<textarea value={pythonCode} onChange={(event) => setPythonCode(event.target.value)} rows={5} className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono text-xs" /></label>
+                  </div>
+                </details>
+              </div>
+            </details>
+
+            <div className="flex items-end gap-2 rounded-3xl border border-slate-300 bg-white p-2 shadow-lg focus-within:border-indigo-400 focus-within:ring-4 focus-within:ring-indigo-50">
+              <textarea
+                value={request}
+                onChange={(event) => setRequest(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    if (!busy && request.trim()) void makePlan();
+                  }
+                }}
+                rows={2}
+                placeholder="Agent에게 연구 작업을 요청하세요..."
+                className="max-h-32 min-h-[52px] flex-1 resize-none bg-transparent px-3 py-2 text-sm leading-6 outline-none placeholder:text-slate-400"
+              />
+              <button
+                type="button"
+                disabled={busy || !request.trim()}
+                onClick={() => void makePlan()}
+                aria-label="작업 계획 생성"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-lg font-black text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {busy ? "…" : "↑"}
+              </button>
+            </div>
+            <p className="mt-1 text-center text-[10px] text-slate-400">
+              Enter로 전송 · Shift+Enter로 줄바꿈 · 실행은 계획 확인 후 별도 승인
+            </p>
+          </div>
+        </section>
 
         <section className="hidden border-r border-slate-200 bg-slate-50 p-4 lg:fixed lg:inset-y-0 lg:left-[72px] lg:block lg:w-[284px] lg:overflow-y-auto">
           <div className="flex flex-wrap items-center justify-between gap-3">
