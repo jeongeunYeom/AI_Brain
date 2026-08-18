@@ -65,6 +65,49 @@ def test_agent_routes_are_registered() -> None:
     assert "/api/agent/tasks/{task_id}/cancel" in paths
     assert "/api/agent/workspace" in paths
     assert "/api/agent/csv-columns" in paths
+    assert "/api/agent/files/preview" in paths
+    assert "/api/agent/files/content" in paths
+
+
+def test_agent_result_file_preview_and_download(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    results = agent_settings.agent_workspace_dir / "results"
+    results.mkdir()
+    (results / "report.txt").write_text("analysis complete", encoding="utf-8")
+    (results / "data.csv").write_text("x,y\n1,2\n3,4\n", encoding="utf-8")
+
+    text_response = client.get(
+        "/api/agent/files/preview", params={"path": "results/report.txt"}
+    )
+    assert text_response.status_code == 200
+    assert text_response.json() == {
+        "path": "results/report.txt", "kind": "text", "content": "analysis complete"
+    }
+
+    csv_response = client.get(
+        "/api/agent/files/preview", params={"path": "results/data.csv"}
+    )
+    assert csv_response.status_code == 200
+    assert csv_response.json()["columns"] == ["x", "y"]
+    assert csv_response.json()["rows"] == [["1", "2"], ["3", "4"]]
+
+    download = client.get(
+        "/api/agent/files/content",
+        params={"path": "results/report.txt", "download": "true"},
+    )
+    assert download.status_code == 200
+    assert download.content == b"analysis complete"
+    assert "attachment" in download.headers["content-disposition"]
+
+
+@pytest.mark.parametrize("path", ["../.env", r"C:\\Windows\\win.ini", ".env"])
+def test_agent_result_file_endpoints_reject_unsafe_paths(
+    client: TestClient, path: str
+) -> None:
+    assert client.get("/api/agent/files/preview", params={"path": path}).status_code == 400
+    assert client.get("/api/agent/files/content", params={"path": path}).status_code == 400
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import csv
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from app.agents.agent_service import (
     AgentApprovalRequired,
@@ -21,6 +25,10 @@ from app.models.agent_schemas import (
 
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+_PREVIEW_EXTENSIONS = {".png", ".txt", ".md", ".csv"}
+_MAX_TEXT_PREVIEW_BYTES = 1_000_000
+_MAX_CSV_PREVIEW_ROWS = 100
 
 
 def get_agent_service(
@@ -102,4 +110,68 @@ def get_agent_csv_columns(
     try:
         return AgentCsvColumnsResponse.model_validate(service.get_csv_columns(path))
     except (AgentSecurityError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _resolve_preview_file(service: AgentService, path: str) -> Path:
+    resolved = service.permissions.resolve_path(
+        path,
+        must_exist=True,
+        allow_directory=False,
+        allowed_extensions=_PREVIEW_EXTENSIONS,
+    )
+    if resolved.stat().st_size > _MAX_TEXT_PREVIEW_BYTES and resolved.suffix.lower() != ".png":
+        raise ValueError("미리보기 가능한 파일 크기(1 MB)를 초과했습니다.")
+    return resolved
+
+
+@router.get("/files/preview")
+def preview_agent_file(
+    path: str = Query(min_length=1, max_length=500),
+    service: AgentService = Depends(get_agent_service),
+):
+    try:
+        resolved = _resolve_preview_file(service, path)
+        relative = service.permissions.to_relative(resolved)
+        suffix = resolved.suffix.lower()
+        if suffix == ".png":
+            return {"path": relative, "kind": "image"}
+        if suffix == ".csv":
+            with resolved.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.reader(handle)
+                rows = []
+                truncated = False
+                for index, row in enumerate(reader):
+                    if index > _MAX_CSV_PREVIEW_ROWS:
+                        truncated = True
+                        break
+                    rows.append(row)
+            return {
+                "path": relative,
+                "kind": "csv",
+                "columns": rows[0] if rows else [],
+                "rows": rows[1:] if rows else [],
+                "truncated": truncated,
+            }
+        return {"path": relative, "kind": "text", "content": resolved.read_text(encoding="utf-8")}
+    except (AgentSecurityError, FileNotFoundError, UnicodeDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/files/content")
+def get_agent_file_content(
+    path: str = Query(min_length=1, max_length=500),
+    download: bool = Query(default=False),
+    service: AgentService = Depends(get_agent_service),
+):
+    try:
+        resolved = service.permissions.resolve_path(
+            path, must_exist=True, allow_directory=False, allowed_extensions=_PREVIEW_EXTENSIONS
+        )
+        return FileResponse(
+            resolved,
+            filename=resolved.name,
+            content_disposition_type="attachment" if download else "inline",
+        )
+    except (AgentSecurityError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
