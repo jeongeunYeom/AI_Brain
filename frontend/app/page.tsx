@@ -16,6 +16,7 @@ import { DocumentInfoPanel } from "@/components/DocumentInfoPanel";
 import { PlotPanel } from "@/components/PlotPanel";
 import { SystemStatusPanel } from "@/components/SystemStatusPanel";
 import { MarkdownMath } from "@/components/MarkdownMath";
+import { AppIconRail, MobileModeTabs } from "@/components/AppNavigation";
 
 
 type FigureReference = {
@@ -500,7 +501,7 @@ export default function Home() {
 
   function startSidebarResize() {
     const onMouseMove = (event: MouseEvent) => {
-      const nextWidth = Math.min(520, Math.max(248, event.clientX));
+      const nextWidth = Math.min(520, Math.max(248, event.clientX - 72));
       setSidebarWidth(nextWidth);
     };
 
@@ -518,7 +519,8 @@ export default function Home() {
   }
 
   return (
-    <main className="flex h-screen overflow-hidden bg-[#eef1f6] text-slate-900">
+    <main className="flex h-screen overflow-hidden bg-[#eef1f6] text-slate-900 md:pl-[72px]">
+      <AppIconRail />
       <aside className="relative hidden shrink-0 border-r border-slate-200 bg-[#f8fafc] md:flex md:flex-col" style={{ width: sidebarWidth }}>
         <div className="flex h-14 items-center gap-3 border-b border-slate-200 px-4">
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-600 text-sm font-bold text-white">A</div>
@@ -690,13 +692,13 @@ export default function Home() {
       <section className="flex min-w-0 flex-1 flex-col bg-white">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 md:px-6">
           <div className="flex items-center gap-3">
-            <button className="rounded-lg border border-slate-200 px-2 py-1 text-sm md:hidden">☰</button>
             <div>
               <h2 className="text-sm font-bold">AI_Brain 7.0 ▾</h2>
               <p className="hidden text-xs text-slate-500 sm:block">Citation-grounded Q&A with local knowledge base</p>
             </div>
           </div>
           <div className="flex items-center gap-2 text-slate-500">
+            <MobileModeTabs />
             <a
               href="/evaluation"
               className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-100"

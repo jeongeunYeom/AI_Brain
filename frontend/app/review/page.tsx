@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { AppIconRail } from "@/components/AppNavigation";
 import {
   getReviewCandidates,
   getReviewSummary,
@@ -330,7 +331,8 @@ export default function FigureReviewPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#eef1f6] text-slate-900">
+    <main className="min-h-screen bg-[#eef1f6] text-slate-900 md:pl-[72px]">
+      <AppIconRail />
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1500px] items-center justify-between px-4 py-4">
           <div>

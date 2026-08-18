@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { AppIconRail } from "@/components/AppNavigation";
 import {
   BenchmarkResult,
   BenchmarkRun,
@@ -256,7 +257,8 @@ export default function EvaluationDashboardPage() {
   ).length;
 
   return (
-    <main className="min-h-screen bg-[#eef1f6] text-slate-900">
+    <main className="min-h-screen bg-[#eef1f6] text-slate-900 md:pl-[72px]">
+      <AppIconRail />
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
         <div className="absolute -left-40 -top-40 h-96 w-96 rounded-full bg-indigo-200/35 blur-3xl" />
         <div className="absolute -right-40 top-1/3 h-96 w-96 rounded-full bg-sky-200/35 blur-3xl" />
