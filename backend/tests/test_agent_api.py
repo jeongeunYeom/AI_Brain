@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import time
 
 import pytest
@@ -67,6 +68,50 @@ def test_agent_routes_are_registered() -> None:
     assert "/api/agent/csv-columns" in paths
     assert "/api/agent/files/preview" in paths
     assert "/api/agent/files/content" in paths
+    assert "/api/agent/runs" in paths
+
+
+def test_agent_run_history_is_newest_first_and_skips_invalid_files(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    first = client.post(
+        "/api/agent/plan",
+        json={"request": "workspace 목록을 확인해줘.", "permission_level": 1},
+    ).json()
+    second = client.post(
+        "/api/agent/plan",
+        json={"request": "다시 workspace 목록을 확인해줘.", "permission_level": 1},
+    ).json()
+    invalid = agent_settings.agent_runs_dir / "AT-BROKEN.json"
+    invalid.write_text("not-json", encoding="utf-8")
+    future = time.time() + 10
+    invalid.touch()
+    os.utime(invalid, (future, future))
+
+    response = client.get("/api/agent/runs", params={"limit": 10})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [run["task_id"] for run in payload["runs"]][:2] == [
+        second["task_id"],
+        first["task_id"],
+    ]
+    assert payload["runs"][0]["request"] == "다시 workspace 목록을 확인해줘."
+    assert payload["skipped_files"] == 1
+
+
+def test_agent_run_history_respects_limit(client: TestClient) -> None:
+    for index in range(3):
+        response = client.post(
+            "/api/agent/plan",
+            json={"request": f"목록 확인 {index}", "permission_level": 1},
+        )
+        assert response.status_code == 201
+
+    response = client.get("/api/agent/runs", params={"limit": 2})
+    assert response.status_code == 200
+    assert len(response.json()["runs"]) == 2
 
 
 def test_agent_result_file_preview_and_download(

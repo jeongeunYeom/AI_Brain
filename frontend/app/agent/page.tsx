@@ -5,6 +5,7 @@ import {
   AgentPermissionLevel,
   AgentFilePreview,
   AgentTask,
+  AgentRunSummary,
   cancelAgentTask,
   createAgentPlan,
   executeAgentTask,
@@ -13,6 +14,7 @@ import {
   getAgentFileUrl,
   getAgentTask,
   listAgentWorkspace,
+  listAgentRuns,
   WorkspaceEntry,
 } from "@/lib/agentApi";
 
@@ -29,6 +31,20 @@ function statusClass(status: AgentTask["status"]): string {
   if (status === "running") return "bg-amber-100 text-amber-700";
   if (status === "canceled") return "bg-slate-200 text-slate-600";
   return "bg-sky-100 text-sky-700";
+}
+
+function formatRunTime(value: string): string {
+  return new Intl.DateTimeFormat("ko-KR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function formatDuration(run: AgentRunSummary): string {
+  if (!run.started_at || !run.completed_at) return "-";
+  const milliseconds = new Date(run.completed_at).getTime() - new Date(run.started_at).getTime();
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "-";
+  return `${(milliseconds / 1000).toFixed(1)}초`;
 }
 
 export default function AgentPage() {
@@ -53,6 +69,35 @@ export default function AgentPage() {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<AgentFilePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [runs, setRuns] = useState<AgentRunSummary[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [skippedRuns, setSkippedRuns] = useState(0);
+
+  async function refreshRuns() {
+    setRunsLoading(true);
+    try {
+      const result = await listAgentRuns();
+      setRuns(result.runs);
+      setSkippedRuns(result.skipped_files);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "작업 기록을 읽지 못했습니다.");
+    } finally {
+      setRunsLoading(false);
+    }
+  }
+
+  async function openRun(taskId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      setTask(await getAgentTask(taskId));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "작업 상세 기록을 읽지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function openPreview(path: string) {
     setPreviewLoading(true);
@@ -78,6 +123,7 @@ export default function AgentPage() {
 
   useEffect(() => {
     void refreshWorkspace(".");
+    void refreshRuns();
   }, []);
 
   useEffect(() => {
@@ -150,6 +196,7 @@ export default function AgentPage() {
         setTask(current);
       }
       await refreshWorkspace(".");
+      await refreshRuns();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Agent 작업 실행에 실패했습니다.");
     } finally {
@@ -163,6 +210,7 @@ export default function AgentPage() {
     setError(null);
     try {
       setTask(await cancelAgentTask(task.task_id));
+      await refreshRuns();
     } catch (err) {
       setError(err instanceof Error ? err.message : "작업 취소에 실패했습니다.");
     } finally {
@@ -548,6 +596,64 @@ export default function AgentPage() {
             </div>
           </section>
         </div>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-black">Agent 작업 기록</h2>
+              <p className="mt-1 text-xs text-slate-500">최근 작업 50개를 최신순으로 표시합니다.</p>
+            </div>
+            <button
+              type="button"
+              disabled={runsLoading}
+              onClick={() => void refreshRuns()}
+              className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold disabled:opacity-40"
+            >
+              {runsLoading ? "불러오는 중..." : "새로고침"}
+            </button>
+          </div>
+          {skippedRuns > 0 && (
+            <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-700">
+              손상된 기록 파일 {skippedRuns}개는 목록에서 제외했습니다.
+            </p>
+          )}
+          {runs.length === 0 ? (
+            <p className="mt-4 rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-400">
+              저장된 작업 기록이 없습니다.
+            </p>
+          ) : (
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              {runs.map((run) => (
+                <article key={run.task_id} className="rounded-2xl border border-slate-200 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-mono text-[11px] text-slate-400">{run.task_id}</p>
+                      <p className="mt-2 line-clamp-2 text-sm font-bold">{run.request}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${statusClass(run.status)}`}>
+                      {run.status}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+                    <span>{formatRunTime(run.created_at)}</span>
+                    <span>실행 {formatDuration(run)}</span>
+                    <span>도구 {run.tools_used.length}개</span>
+                    <span>결과 {run.created_files.length + run.modified_files.length}개</span>
+                  </div>
+                  {run.error && <p className="mt-3 line-clamp-2 text-xs text-red-700">{run.error}</p>}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void openRun(run.task_id)}
+                    className="mt-4 w-full rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
+                  >
+                    상세 보기
+                  </button>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
       {preview && <FilePreviewModal preview={preview} onClose={() => setPreview(null)} />}
     </main>

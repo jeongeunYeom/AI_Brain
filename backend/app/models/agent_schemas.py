@@ -100,3 +100,22 @@ class AgentWorkspaceResponse(BaseModel):
 class AgentCsvColumnsResponse(BaseModel):
     path: str
     columns: list[str]
+
+
+class AgentRunSummary(BaseModel):
+    task_id: str
+    request: str
+    status: AgentTaskStatus
+    created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    tools_used: list[str] = Field(default_factory=list)
+    read_files: list[str] = Field(default_factory=list)
+    created_files: list[str] = Field(default_factory=list)
+    modified_files: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class AgentRunListResponse(BaseModel):
+    runs: list[AgentRunSummary]
+    skipped_files: int = 0
