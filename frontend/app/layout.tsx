@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { ModeSwitcher } from "@/components/ModeSwitcher";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,7 +13,6 @@ export default function RootLayout({
     <html lang="ko">
       <body>
         {children}
-        <ModeSwitcher />
       </body>
     </html>
   );

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { AppIconRail, MobileModeTabs } from "@/components/AppNavigation";
 import {
   AgentPermissionLevel,
   AgentFilePreview,
@@ -231,8 +232,8 @@ export default function AgentPage() {
   const isCsvTarget = targetPath.trim().toLowerCase().endsWith(".csv");
 
   return (
-    <main className="min-h-screen bg-white text-slate-900 lg:pl-[356px]">
-      <AgentIconRail />
+    <main className="min-h-screen bg-white text-slate-900 md:pl-[72px] lg:pl-[356px]">
+      <AppIconRail />
       <AgentMobileDrawer
         open={mobileMenuOpen}
         runs={runs}
@@ -249,7 +250,7 @@ export default function AgentPage() {
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen(true)}
-                className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 lg:hidden"
+                className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 md:hidden"
                 aria-label="메뉴 열기"
               >
                 <span className="text-lg">☰</span>
@@ -267,6 +268,7 @@ export default function AgentPage() {
             <span className="rounded-full bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-700">
               삭제 · 셸 명령 · 인터넷 차단
             </span>
+            <MobileModeTabs />
           </div>
         </header>
 
@@ -680,35 +682,12 @@ export default function AgentPage() {
   );
 }
 
-const NAV_ITEMS = [
+const MOBILE_NAV_ITEMS = [
   { href: "/", icon: "⌂", label: "RAG 채팅" },
   { href: "/agent", icon: "✦", label: "Agent", active: true },
   { href: "/review", icon: "▧", label: "Figure Review" },
   { href: "/evaluation", icon: "◫", label: "평가" },
 ];
-
-function AgentIconRail() {
-  return (
-    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[72px] flex-col items-center border-r border-slate-200 bg-white py-4 lg:flex">
-      <Link href="/" className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-sm font-black text-white shadow-sm" aria-label="AI_Brain 홈">
-        AI
-      </Link>
-      <nav className="mt-6 flex flex-1 flex-col gap-2">
-        {NAV_ITEMS.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            title={item.label}
-            className={`flex h-10 w-10 items-center justify-center rounded-xl text-lg transition ${item.active ? "bg-emerald-50 text-emerald-700" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}
-          >
-            {item.icon}
-          </Link>
-        ))}
-      </nav>
-      <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-xs font-bold text-white">JE</span>
-    </aside>
-  );
-}
 
 function AgentMobileDrawer({
   open,
@@ -734,7 +713,7 @@ function AgentMobileDrawer({
           <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold">닫기</button>
         </div>
         <nav className="mt-6 space-y-1 border-b border-slate-200 pb-5">
-          {NAV_ITEMS.map((item) => (
+          {MOBILE_NAV_ITEMS.map((item) => (
             <Link key={item.href} href={item.href} onClick={onClose} className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-bold ${item.active ? "bg-emerald-50 text-emerald-700" : "text-slate-600"}`}>
               <span className="w-6 text-center text-lg">{item.icon}</span>{item.label}
             </Link>
