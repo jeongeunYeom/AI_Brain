@@ -174,6 +174,40 @@ class AgentService:
             "columns": csv_info["columns"],
         }
 
+    def list_runs(self, limit: int = 50) -> dict:
+        runs: list[dict] = []
+        skipped_files = 0
+        paths = sorted(
+            self.settings.agent_runs_dir.glob("AT-*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for path in paths:
+            if len(runs) >= limit:
+                break
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                task = AgentTaskResponse.model_validate(record)
+            except (OSError, json.JSONDecodeError, ValueError):
+                skipped_files += 1
+                continue
+            runs.append(
+                {
+                    "task_id": task.task_id,
+                    "request": task.request,
+                    "status": task.status,
+                    "created_at": task.created_at,
+                    "started_at": task.started_at,
+                    "completed_at": task.completed_at,
+                    "tools_used": task.tools_used,
+                    "read_files": task.read_files,
+                    "created_files": task.created_files,
+                    "modified_files": task.modified_files,
+                    "error": task.error,
+                }
+            )
+        return {"runs": runs, "skipped_files": skipped_files}
+
     def _record_rejected_plan(
         self,
         request: AgentPlanRequest,

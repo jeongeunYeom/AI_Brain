@@ -95,6 +95,26 @@ export type AgentFilePreview =
   | { path: string; kind: "text"; content: string }
   | { path: string; kind: "csv"; columns: string[]; rows: string[][]; truncated: boolean };
 
+export type AgentRunSummary = Pick<
+  AgentTask,
+  | "task_id"
+  | "request"
+  | "status"
+  | "created_at"
+  | "started_at"
+  | "completed_at"
+  | "tools_used"
+  | "read_files"
+  | "created_files"
+  | "modified_files"
+  | "error"
+>;
+
+export type AgentRunList = {
+  runs: AgentRunSummary[];
+  skipped_files: number;
+};
+
 export function createAgentPlan(input: AgentPlanInput): Promise<AgentTask> {
   return requestJson("/agent/plan", {
     method: "POST",
@@ -140,4 +160,9 @@ export function getAgentFilePreview(path: string): Promise<AgentFilePreview> {
 export function getAgentFileUrl(path: string, download = false): string {
   const query = new URLSearchParams({ path, download: String(download) });
   return `${API_BASE}/agent/files/content?${query}`;
+}
+
+export function listAgentRuns(limit = 50): Promise<AgentRunList> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return requestJson(`/agent/runs?${query}`, { cache: "no-store" });
 }

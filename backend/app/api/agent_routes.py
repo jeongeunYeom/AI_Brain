@@ -19,6 +19,7 @@ from app.models.agent_schemas import (
     AgentCsvColumnsResponse,
     AgentExecuteRequest,
     AgentPlanRequest,
+    AgentRunListResponse,
     AgentTaskResponse,
     AgentWorkspaceResponse,
 )
@@ -100,6 +101,14 @@ def list_agent_workspace(
         return AgentWorkspaceResponse.model_validate(service.list_workspace(path))
     except (AgentSecurityError, FileNotFoundError, NotADirectoryError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/runs", response_model=AgentRunListResponse)
+def list_agent_runs(
+    limit: int = Query(default=50, ge=1, le=100),
+    service: AgentService = Depends(get_agent_service),
+) -> AgentRunListResponse:
+    return AgentRunListResponse.model_validate(service.list_runs(limit))
 
 
 @router.get("/csv-columns", response_model=AgentCsvColumnsResponse)
