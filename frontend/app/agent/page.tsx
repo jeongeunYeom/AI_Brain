@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   AgentPermissionLevel,
   AgentFilePreview,
@@ -72,6 +73,7 @@ export default function AgentPage() {
   const [runs, setRuns] = useState<AgentRunSummary[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
   const [skippedRuns, setSkippedRuns] = useState(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   async function refreshRuns() {
     setRunsLoading(true);
@@ -229,20 +231,38 @@ export default function AgentPage() {
   const isCsvTarget = targetPath.trim().toLowerCase().endsWith(".csv");
 
   return (
-    <main className="min-h-screen bg-slate-100 px-4 py-8 text-slate-900">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <header className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+    <main className="min-h-screen bg-white text-slate-900 lg:pl-[356px]">
+      <AgentIconRail />
+      <AgentMobileDrawer
+        open={mobileMenuOpen}
+        runs={runs}
+        onClose={() => setMobileMenuOpen(false)}
+        onOpenRun={(taskId) => {
+          setMobileMenuOpen(false);
+          void openRun(taskId);
+        }}
+      />
+      <div className="mx-auto max-w-6xl space-y-5 px-4 py-4 sm:px-6 lg:px-8 lg:py-6">
+        <header className="border-b border-slate-200 bg-white pb-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
+            <div className="flex min-w-0 items-start gap-3">
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(true)}
+                className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 lg:hidden"
+                aria-label="메뉴 열기"
+              >
+                <span className="text-lg">☰</span>
+              </button>
+              <div>
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-600">
                 AI_Brain Research Agent
               </p>
-              <h1 className="mt-2 text-2xl font-black">승인 기반 석유공학 작업 Agent</h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                먼저 작업 계획과 대상 파일, 실행 코드를 확인한 뒤 승인하세요. Agent는 설정된
-                workspace 안에서만 파일을 읽고, 생성·수정·Python 실행 기록을 data/agent_runs에
-                저장합니다.
+              <h1 className="mt-1 text-xl font-black sm:text-2xl">석유공학 작업 Agent</h1>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500 sm:text-sm">
+                계획을 확인하고 승인한 뒤 안전한 workspace 안에서 연구 작업을 실행하세요.
               </p>
+              </div>
             </div>
             <span className="rounded-full bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-700">
               삭제 · 셸 명령 · 인터넷 차단
@@ -250,8 +270,8 @@ export default function AgentPage() {
           </div>
         </header>
 
-        <div className="grid gap-6 xl:grid-cols-[1fr_1.35fr]">
-          <section className="space-y-5 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="grid gap-5 xl:grid-cols-[minmax(310px_.8fr)_minmax(420px_1.2fr)]">
+          <section className="space-y-5 rounded-2xl border border-slate-200 bg-slate-50/50 p-5">
             <div>
               <label className="text-sm font-bold">사용자 요청</label>
               <textarea
@@ -259,7 +279,7 @@ export default function AgentPage() {
                 onChange={(event) => setRequest(event.target.value)}
                 rows={5}
                 placeholder="예: johansen_results.csv를 분석해서 산점도를 만들어줘."
-                className="mt-2 w-full rounded-2xl border border-slate-200 p-3 text-sm outline-none focus:border-emerald-400"
+                className="mt-2 w-full resize-none rounded-2xl border border-slate-200 bg-white p-3 text-sm shadow-sm outline-none focus:border-emerald-400"
               />
             </div>
 
@@ -418,7 +438,7 @@ export default function AgentPage() {
           </section>
 
           <section className="space-y-5">
-            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="font-black">작업 계획과 승인</h2>
@@ -548,7 +568,7 @@ export default function AgentPage() {
               )}
             </div>
 
-            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="font-black">Agent workspace</h2>
@@ -597,11 +617,11 @@ export default function AgentPage() {
           </section>
         </div>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="hidden border-r border-slate-200 bg-slate-50 p-4 lg:fixed lg:inset-y-0 lg:left-[72px] lg:block lg:w-[284px] lg:overflow-y-auto">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="font-black">Agent 작업 기록</h2>
-              <p className="mt-1 text-xs text-slate-500">최근 작업 50개를 최신순으로 표시합니다.</p>
+              <p className="mt-1 text-xs text-slate-500">최근 작업을 최신순으로 표시합니다.</p>
             </div>
             <button
               type="button"
@@ -622,7 +642,7 @@ export default function AgentPage() {
               저장된 작업 기록이 없습니다.
             </p>
           ) : (
-            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            <div className="mt-4 grid gap-3">
               {runs.map((run) => (
                 <article key={run.task_id} className="rounded-2xl border border-slate-200 p-4">
                   <div className="flex items-start justify-between gap-3">
@@ -645,7 +665,7 @@ export default function AgentPage() {
                     type="button"
                     disabled={busy}
                     onClick={() => void openRun(run.task_id)}
-                    className="mt-4 w-full rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
+                    className="mt-4 w-full rounded-xl bg-white px-3 py-2 text-xs font-bold text-emerald-700 ring-1 ring-slate-200 disabled:opacity-40"
                   >
                     상세 보기
                   </button>
@@ -657,6 +677,83 @@ export default function AgentPage() {
       </div>
       {preview && <FilePreviewModal preview={preview} onClose={() => setPreview(null)} />}
     </main>
+  );
+}
+
+const NAV_ITEMS = [
+  { href: "/", icon: "⌂", label: "RAG 채팅" },
+  { href: "/agent", icon: "✦", label: "Agent", active: true },
+  { href: "/review", icon: "▧", label: "Figure Review" },
+  { href: "/evaluation", icon: "◫", label: "평가" },
+];
+
+function AgentIconRail() {
+  return (
+    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[72px] flex-col items-center border-r border-slate-200 bg-white py-4 lg:flex">
+      <Link href="/" className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-sm font-black text-white shadow-sm" aria-label="AI_Brain 홈">
+        AI
+      </Link>
+      <nav className="mt-6 flex flex-1 flex-col gap-2">
+        {NAV_ITEMS.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            title={item.label}
+            className={`flex h-10 w-10 items-center justify-center rounded-xl text-lg transition ${item.active ? "bg-emerald-50 text-emerald-700" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}
+          >
+            {item.icon}
+          </Link>
+        ))}
+      </nav>
+      <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-xs font-bold text-white">JE</span>
+    </aside>
+  );
+}
+
+function AgentMobileDrawer({
+  open,
+  runs,
+  onClose,
+  onOpenRun,
+}: {
+  open: boolean;
+  runs: AgentRunSummary[];
+  onClose: () => void;
+  onOpenRun: (taskId: string) => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 lg:hidden">
+      <button type="button" onClick={onClose} className="absolute inset-0 bg-slate-950/35" aria-label="메뉴 닫기" />
+      <aside className="relative h-full w-[86%] max-w-sm overflow-y-auto bg-white p-5 shadow-2xl">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-sm font-black text-white">AI</span>
+            <div><p className="font-black">AI_Brain</p><p className="text-xs text-slate-400">Research workspace</p></div>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold">닫기</button>
+        </div>
+        <nav className="mt-6 space-y-1 border-b border-slate-200 pb-5">
+          {NAV_ITEMS.map((item) => (
+            <Link key={item.href} href={item.href} onClick={onClose} className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-bold ${item.active ? "bg-emerald-50 text-emerald-700" : "text-slate-600"}`}>
+              <span className="w-6 text-center text-lg">{item.icon}</span>{item.label}
+            </Link>
+          ))}
+        </nav>
+        <div className="mt-5">
+          <div className="flex items-center justify-between"><h2 className="font-black">최근 작업</h2><span className="text-xs text-slate-400">{runs.length}개</span></div>
+          <div className="mt-3 space-y-2">
+            {runs.slice(0, 12).map((run) => (
+              <button key={run.task_id} type="button" onClick={() => onOpenRun(run.task_id)} className="w-full rounded-xl border border-slate-200 p-3 text-left">
+                <div className="flex items-start justify-between gap-2"><p className="line-clamp-2 text-xs font-bold leading-5">{run.request}</p><span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${statusClass(run.status)}`}>{run.status}</span></div>
+                <p className="mt-2 text-[10px] text-slate-400">{formatRunTime(run.created_at)}</p>
+              </button>
+            ))}
+            {runs.length === 0 && <p className="rounded-xl bg-slate-50 p-4 text-center text-xs text-slate-400">저장된 작업이 없습니다.</p>}
+          </div>
+        </div>
+      </aside>
+    </div>
   );
 }
 
