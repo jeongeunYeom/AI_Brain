@@ -69,6 +69,89 @@ def test_agent_routes_are_registered() -> None:
     assert "/api/agent/files/preview" in paths
     assert "/api/agent/files/content" in paths
     assert "/api/agent/runs" in paths
+    assert "/api/agent/conversations" in paths
+    assert "/api/agent/conversations/{conversation_id}" in paths
+
+
+def test_conversation_groups_multiple_tasks_and_restores_them(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    created = client.post(
+        "/api/agent/conversations",
+        json={"title": "CO2 결과 분석"},
+    )
+    assert created.status_code == 201
+    conversation_id = created.json()["conversation_id"]
+
+    first = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "workspace 목록을 확인해줘.",
+            "conversation_id": conversation_id,
+            "permission_level": 1,
+        },
+    )
+    second = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "같은 대화에서 다시 목록을 확인해줘.",
+            "conversation_id": conversation_id,
+            "permission_level": 1,
+        },
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["conversation_id"] == conversation_id
+    assert second.json()["conversation_id"] == conversation_id
+
+    restarted_service = AgentService(agent_settings)
+    restored = restarted_service.get_conversation(conversation_id)
+
+    assert restored.title == "CO2 결과 분석"
+    assert restored.task_count == 2
+    assert [task.task_id for task in restored.tasks] == [
+        first.json()["task_id"],
+        second.json()["task_id"],
+    ]
+    assert [task.request for task in restored.tasks] == [
+        "workspace 목록을 확인해줘.",
+        "같은 대화에서 다시 목록을 확인해줘.",
+    ]
+
+
+def test_plan_without_conversation_creates_one_automatically(client: TestClient) -> None:
+    planned = client.post(
+        "/api/agent/plan",
+        json={"request": "새 자동 대화를 시작해줘.", "permission_level": 1},
+    )
+    assert planned.status_code == 201
+    conversation_id = planned.json()["conversation_id"]
+    assert conversation_id.startswith("CV-")
+
+    detail = client.get(f"/api/agent/conversations/{conversation_id}")
+    assert detail.status_code == 200
+    assert detail.json()["task_count"] == 1
+    assert detail.json()["title"] == "새 자동 대화를 시작해줘."
+
+
+def test_conversation_list_is_newest_first(client: TestClient) -> None:
+    first = client.post(
+        "/api/agent/conversations",
+        json={"title": "첫 번째 대화"},
+    ).json()
+    second = client.post(
+        "/api/agent/conversations",
+        json={"title": "두 번째 대화"},
+    ).json()
+
+    response = client.get("/api/agent/conversations", params={"limit": 2})
+
+    assert response.status_code == 200
+    assert [item["conversation_id"] for item in response.json()["conversations"]] == [
+        second["conversation_id"],
+        first["conversation_id"],
+    ]
 
 
 def test_agent_run_history_is_newest_first_and_skips_invalid_files(
