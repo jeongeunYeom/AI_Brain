@@ -257,6 +257,10 @@ class Settings:
         return self.data_dir / "agent_runs"
 
     @property
+    def agent_conversations_dir(self) -> Path:
+        return self.data_dir / "agent_conversations"
+
+    @property
     def agent_backups_dir(self) -> Path:
         return self.data_dir / "agent_backups"
 
@@ -276,6 +280,7 @@ def get_settings() -> Settings:
         settings.metadata_dir,
         settings.evaluation_dir,
         settings.agent_runs_dir,
+        settings.agent_conversations_dir,
         settings.agent_backups_dir,
         settings.agent_workspace_dir,
     ]:
