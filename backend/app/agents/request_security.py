@@ -32,6 +32,20 @@ _SENSITIVE_PATTERN = re.compile(
     r"(?=$|[\\/\s\"'`),.!?])",
     flags=re.IGNORECASE,
 )
+_DELETE_INTENT_PATTERN = re.compile(
+    r"(?i)(?:"
+    r"(?:파일|폴더|디렉터리|자료|결과물).{0,12}(?:삭제|지워|제거)"
+    r"|(?:삭제|지워|제거).{0,12}(?:파일|폴더|디렉터리|자료|결과물)"
+    r"|\b(?:delete|remove|unlink|rmdir|rm)\b"
+    r")"
+)
+_SHELL_INTENT_PATTERN = re.compile(
+    r"(?i)(?:"
+    r"(?:shell|쉘|셸|터미널|명령\s*프롬프트|powershell|cmd)"
+    r".{0,16}(?:명령|command|실행|run)"
+    r"|(?:명령|command).{0,16}(?:shell|쉘|셸|터미널|powershell|cmd)"
+    r")"
+)
 
 
 def validate_agent_plan_request(request: AgentPlanRequest) -> None:
@@ -44,6 +58,10 @@ def validate_agent_plan_request(request: AgentPlanRequest) -> None:
 
 def _validate_request_text(value: str) -> None:
     text = _normalize(value)
+    if _DELETE_INTENT_PATTERN.search(text):
+        raise AgentRequestRejected("파일 또는 폴더 삭제 작업은 허용되지 않습니다.")
+    if _SHELL_INTENT_PATTERN.search(text):
+        raise AgentRequestRejected("임의 shell 명령 실행은 허용되지 않습니다.")
     if _URL_PATTERN.search(text):
         raise AgentRequestRejected(
             "인터넷 URL에는 접근할 수 없습니다. workspace 내부 파일을 사용하세요."
