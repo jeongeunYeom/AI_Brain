@@ -114,6 +114,46 @@ def test_agent_run_history_respects_limit(client: TestClient) -> None:
     assert len(response.json()["runs"]) == 2
 
 
+def test_agent_task_is_restored_by_new_service_instance(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    planned = client.post(
+        "/api/agent/plan",
+        json={"request": "workspace 목록을 확인해줘.", "permission_level": 1},
+    )
+    assert planned.status_code == 201
+    task_id = planned.json()["task_id"]
+
+    restarted_service = AgentService(agent_settings)
+    restored = restarted_service.get_task(task_id)
+
+    assert restored.task_id == task_id
+    assert restored.request == "workspace 목록을 확인해줘."
+    assert restored.status == "planned"
+
+
+def test_planned_task_can_be_canceled(client: TestClient) -> None:
+    planned = client.post(
+        "/api/agent/plan",
+        json={"request": "workspace 목록을 확인해줘.", "permission_level": 1},
+    )
+    assert planned.status_code == 201
+    task_id = planned.json()["task_id"]
+
+    canceled = client.post(f"/api/agent/tasks/{task_id}/cancel")
+
+    assert canceled.status_code == 200
+    assert canceled.json()["status"] == "canceled"
+    assert canceled.json()["cancel_requested"] is True
+
+    execute = client.post(
+        f"/api/agent/tasks/{task_id}/execute",
+        json={"approved": True},
+    )
+    assert execute.status_code == 409
+
+
 def test_agent_result_file_preview_and_download(
     client: TestClient,
     agent_settings: Settings,
@@ -214,6 +254,31 @@ def test_rejected_task_cannot_be_executed(client: TestClient) -> None:
         json={"approved": True},
     )
     assert executed.status_code == 409
+
+
+@pytest.mark.parametrize(
+    ("request_text", "expected_message"),
+    [
+        ("workspace의 result.csv 파일을 삭제해줘.", "삭제"),
+        ("PowerShell 명령을 실행해줘.", "shell"),
+    ],
+)
+def test_destructive_or_shell_requests_are_rejected_before_planning(
+    client: TestClient,
+    request_text: str,
+    expected_message: str,
+) -> None:
+    response = client.post(
+        "/api/agent/plan",
+        json={"request": request_text, "permission_level": 3},
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    assert task["status"] == "failed"
+    assert task["actions"] == []
+    assert task["required_tools"] == []
+    assert expected_message in task["error"]
 
 
 def test_safe_directory_request_still_uses_list_directory(client: TestClient) -> None:
