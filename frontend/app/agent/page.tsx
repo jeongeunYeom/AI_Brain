@@ -6,16 +6,20 @@ import { AppIconRail, MobileModeTabs } from "@/components/AppNavigation";
 import {
   AgentPermissionLevel,
   AgentFilePreview,
+  AgentConversationSummary,
   AgentTask,
   AgentRunSummary,
   cancelAgentTask,
+  createAgentConversation,
   createAgentPlan,
   executeAgentTask,
   getAgentCsvColumns,
+  getAgentConversation,
   getAgentFilePreview,
   getAgentFileUrl,
   getAgentTask,
   listAgentWorkspace,
+  listAgentConversations,
   listAgentRuns,
   WorkspaceEntry,
 } from "@/lib/agentApi";
@@ -65,6 +69,9 @@ export default function AgentPage() {
   const [permissionLevel, setPermissionLevel] =
     useState<AgentPermissionLevel>(3);
   const [task, setTask] = useState<AgentTask | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversationTasks, setConversationTasks] = useState<AgentTask[]>([]);
+  const [conversations, setConversations] = useState<AgentConversationSummary[]>([]);
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [workspacePath, setWorkspacePath] = useState(".");
   const [busy, setBusy] = useState(false);
@@ -75,6 +82,48 @@ export default function AgentPage() {
   const [runsLoading, setRunsLoading] = useState(false);
   const [skippedRuns, setSkippedRuns] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  async function refreshConversations() {
+    try {
+      const result = await listAgentConversations();
+      setConversations(result.conversations);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "대화 목록을 읽지 못했습니다.");
+    }
+  }
+
+  async function openConversation(nextConversationId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      const detail = await getAgentConversation(nextConversationId);
+      setConversationId(detail.conversation_id);
+      setConversationTasks(detail.tasks);
+      setTask(detail.tasks.at(-1) ?? null);
+      setRequest("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "대화를 복원하지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startNewConversation() {
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createAgentConversation();
+      setConversationId(created.conversation_id);
+      setConversationTasks([]);
+      setTask(null);
+      setRequest("");
+      await refreshConversations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "새 대화를 만들지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function refreshRuns() {
     setRunsLoading(true);
@@ -93,7 +142,14 @@ export default function AgentPage() {
     setBusy(true);
     setError(null);
     try {
-      setTask(await getAgentTask(taskId));
+      const selected = await getAgentTask(taskId);
+      if (selected.conversation_id) {
+        await openConversation(selected.conversation_id);
+      } else {
+        setConversationId(null);
+        setConversationTasks([selected]);
+        setTask(selected);
+      }
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "작업 상세 기록을 읽지 못했습니다.");
@@ -127,6 +183,7 @@ export default function AgentPage() {
   useEffect(() => {
     void refreshWorkspace(".");
     void refreshRuns();
+    void refreshConversations();
   }, []);
 
   useEffect(() => {
@@ -168,6 +225,7 @@ export default function AgentPage() {
     try {
       const planned = await createAgentPlan({
         request: request.trim(),
+        conversation_id: conversationId || undefined,
         target_path: targetPath.trim() || undefined,
         output_path: outputPath.trim() || undefined,
         x_column: xColumn || undefined,
@@ -178,7 +236,15 @@ export default function AgentPage() {
         python_code: pythonCode || undefined,
         permission_level: permissionLevel,
       });
+      setConversationId(planned.conversation_id ?? null);
+      setConversationTasks((current) => {
+        const sameConversation =
+          current.length === 0 || current[0].conversation_id === planned.conversation_id;
+        return sameConversation ? [...current, planned] : [planned];
+      });
       setTask(planned);
+      setRequest("");
+      await refreshConversations();
     } catch (err) {
       setError(err instanceof Error ? err.message : "작업 계획 생성에 실패했습니다.");
     } finally {
@@ -193,13 +259,20 @@ export default function AgentPage() {
     try {
       let current = await executeAgentTask(task.task_id, approved);
       setTask(current);
+      setConversationTasks((tasks) =>
+        tasks.map((item) => item.task_id === current.task_id ? current : item),
+      );
       while (current.status === "running") {
         await new Promise((resolve) => window.setTimeout(resolve, 500));
         current = await getAgentTask(task.task_id);
         setTask(current);
+        setConversationTasks((tasks) =>
+          tasks.map((item) => item.task_id === current.task_id ? current : item),
+        );
       }
       await refreshWorkspace(".");
       await refreshRuns();
+      await refreshConversations();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Agent 작업 실행에 실패했습니다.");
     } finally {
@@ -212,8 +285,13 @@ export default function AgentPage() {
     setBusy(true);
     setError(null);
     try {
-      setTask(await cancelAgentTask(task.task_id));
+      const canceled = await cancelAgentTask(task.task_id);
+      setTask(canceled);
+      setConversationTasks((tasks) =>
+        tasks.map((item) => item.task_id === canceled.task_id ? canceled : item),
+      );
       await refreshRuns();
+      await refreshConversations();
     } catch (err) {
       setError(err instanceof Error ? err.message : "작업 취소에 실패했습니다.");
     } finally {
@@ -265,15 +343,65 @@ export default function AgentPage() {
               </p>
               </div>
             </div>
-            <span className="rounded-full bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-700">
-              삭제 · 셸 명령 · 인터넷 차단
-            </span>
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+              <select
+                value={conversationId ?? ""}
+                onChange={(event) => {
+                  if (event.target.value) void openConversation(event.target.value);
+                }}
+                disabled={busy}
+                aria-label="Agent 대화 선택"
+                className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold sm:max-w-64"
+              >
+                <option value="">대화 선택</option>
+                {conversations.map((conversation) => (
+                  <option key={conversation.conversation_id} value={conversation.conversation_id}>
+                    {conversation.title} ({conversation.task_count})
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void startNewConversation()}
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40"
+              >
+                ＋ 새 대화
+              </button>
+              <span className="rounded-full bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-700">
+                삭제 · 셸 · 인터넷 차단
+              </span>
+            </div>
             <MobileModeTabs />
           </div>
         </header>
 
         <div className="space-y-5 pb-48 sm:pb-44">
           <section className="space-y-5">
+            {conversationTasks
+              .filter((item) => item.task_id !== task?.task_id)
+              .map((item) => (
+                <div key={item.task_id} className="space-y-3 border-b border-slate-100 pb-5">
+                  <div className="flex justify-end">
+                    <div className="max-w-[82%] rounded-3xl rounded-br-md bg-indigo-50 px-5 py-3 text-sm leading-6 text-indigo-950">
+                      {item.request}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTask(item)}
+                    className="ml-0 flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-xs shadow-sm sm:ml-12 sm:w-[calc(100%-3rem)]"
+                  >
+                    <span className="min-w-0">
+                      <span className="block font-bold">이전 Agent 작업</span>
+                      <span className="mt-1 block truncate text-slate-400">{item.task_id}</span>
+                    </span>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 font-bold ${statusClass(item.status)}`}>
+                      {item.status}
+                    </span>
+                  </button>
+                </div>
+              ))}
             {!task && (
               <div className="flex items-start gap-3">
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-xs font-black text-white">
