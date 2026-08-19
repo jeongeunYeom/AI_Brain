@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 
 from app.agents.agent_service import (
     AgentApprovalRequired,
+    AgentConversationNotFound,
     AgentPermissionError,
     AgentSecurityError,
     AgentService,
@@ -16,6 +17,10 @@ from app.agents.agent_service import (
 )
 from app.core.config import Settings, get_settings
 from app.models.agent_schemas import (
+    AgentConversationCreateRequest,
+    AgentConversationDetail,
+    AgentConversationListResponse,
+    AgentConversationSummary,
     AgentCsvColumnsResponse,
     AgentExecuteRequest,
     AgentPlanRequest,
@@ -38,6 +43,40 @@ def get_agent_service(
     return AgentService(settings)
 
 
+@router.post(
+    "/conversations",
+    response_model=AgentConversationSummary,
+    status_code=201,
+)
+def create_agent_conversation(
+    request: AgentConversationCreateRequest,
+    service: AgentService = Depends(get_agent_service),
+) -> AgentConversationSummary:
+    return service.create_conversation(request.title)
+
+
+@router.get("/conversations", response_model=AgentConversationListResponse)
+def list_agent_conversations(
+    limit: int = Query(default=50, ge=1, le=100),
+    service: AgentService = Depends(get_agent_service),
+) -> AgentConversationListResponse:
+    return service.list_conversations(limit)
+
+
+@router.get(
+    "/conversations/{conversation_id}",
+    response_model=AgentConversationDetail,
+)
+def get_agent_conversation(
+    conversation_id: str,
+    service: AgentService = Depends(get_agent_service),
+) -> AgentConversationDetail:
+    try:
+        return service.get_conversation(conversation_id)
+    except AgentConversationNotFound as exc:
+        raise HTTPException(status_code=404, detail="Agent conversation not found") from exc
+
+
 @router.post("/plan", response_model=AgentTaskResponse, status_code=201)
 def create_agent_plan(
     request: AgentPlanRequest,
@@ -45,7 +84,13 @@ def create_agent_plan(
 ) -> AgentTaskResponse:
     try:
         return service.create_plan(request)
-    except (AgentSecurityError, AgentPermissionError, ValueError, FileNotFoundError) as exc:
+    except (
+        AgentConversationNotFound,
+        AgentSecurityError,
+        AgentPermissionError,
+        ValueError,
+        FileNotFoundError,
+    ) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
