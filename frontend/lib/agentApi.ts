@@ -27,6 +27,7 @@ export type AgentAction = {
 
 export type AgentTask = {
   task_id: string;
+  conversation_id?: string | null;
   request: string;
   status: AgentTaskStatus;
   permission_level: AgentPermissionLevel;
@@ -60,6 +61,7 @@ export type AgentTask = {
 
 export type AgentPlanInput = {
   request: string;
+  conversation_id?: string;
   target_path?: string;
   output_path?: string;
   x_column?: string;
@@ -115,6 +117,24 @@ export type AgentRunList = {
   skipped_files: number;
 };
 
+export type AgentConversationSummary = {
+  conversation_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  task_count: number;
+  last_task_status?: AgentTaskStatus | null;
+};
+
+export type AgentConversationDetail = AgentConversationSummary & {
+  tasks: AgentTask[];
+};
+
+export type AgentConversationList = {
+  conversations: AgentConversationSummary[];
+  skipped_files: number;
+};
+
 export function createAgentPlan(input: AgentPlanInput): Promise<AgentTask> {
   return requestJson("/agent/plan", {
     method: "POST",
@@ -165,4 +185,29 @@ export function getAgentFileUrl(path: string, download = false): string {
 export function listAgentRuns(limit = 50): Promise<AgentRunList> {
   const query = new URLSearchParams({ limit: String(limit) });
   return requestJson(`/agent/runs?${query}`, { cache: "no-store" });
+}
+
+export function createAgentConversation(
+  title?: string,
+): Promise<AgentConversationSummary> {
+  return requestJson("/agent/conversations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+}
+
+export function listAgentConversations(
+  limit = 50,
+): Promise<AgentConversationList> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return requestJson(`/agent/conversations?${query}`, { cache: "no-store" });
+}
+
+export function getAgentConversation(
+  conversationId: string,
+): Promise<AgentConversationDetail> {
+  return requestJson(`/agent/conversations/${conversationId}`, {
+    cache: "no-store",
+  });
 }
