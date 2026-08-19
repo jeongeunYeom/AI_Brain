@@ -40,6 +40,7 @@ class AgentAction(BaseModel):
 
 class AgentPlanRequest(BaseModel):
     request: str = Field(min_length=1, max_length=4000)
+    conversation_id: str | None = Field(default=None, pattern=r"^CV-[A-Z0-9-]+$")
     target_path: str | None = Field(default=None, max_length=500)
     output_path: str | None = Field(default=None, max_length=500)
     x_column: str | None = Field(default=None, max_length=200)
@@ -57,6 +58,7 @@ class AgentExecuteRequest(BaseModel):
 
 class AgentTaskResponse(BaseModel):
     task_id: str
+    conversation_id: str | None = None
     request: str
     status: AgentTaskStatus
     permission_level: AgentPermissionLevel
@@ -119,3 +121,25 @@ class AgentRunSummary(BaseModel):
 class AgentRunListResponse(BaseModel):
     runs: list[AgentRunSummary]
     skipped_files: int = 0
+
+
+class AgentConversationCreateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+
+
+class AgentConversationSummary(BaseModel):
+    conversation_id: str
+    title: str
+    created_at: str
+    updated_at: str
+    task_count: int = 0
+    last_task_status: AgentTaskStatus | None = None
+
+
+class AgentConversationListResponse(BaseModel):
+    conversations: list[AgentConversationSummary]
+    skipped_files: int = 0
+
+
+class AgentConversationDetail(AgentConversationSummary):
+    tasks: list[AgentTaskResponse] = Field(default_factory=list)
