@@ -20,6 +20,9 @@ from app.agents.request_security import (
 from app.agents.tool_registry import ToolRegistry
 from app.core.config import Settings
 from app.models.agent_schemas import (
+    AgentConversationDetail,
+    AgentConversationListResponse,
+    AgentConversationSummary,
     AgentPlanRequest,
     AgentTaskResponse,
     AgentTaskStatus,
@@ -27,6 +30,10 @@ from app.models.agent_schemas import (
 
 
 class AgentTaskNotFound(KeyError):
+    pass
+
+
+class AgentConversationNotFound(KeyError):
     pass
 
 
@@ -53,10 +60,18 @@ class AgentService:
         self.executor = AgentExecutor(self.permissions, self.tools)
 
     def create_plan(self, request: AgentPlanRequest) -> AgentTaskResponse:
+        conversation_id = self._ensure_conversation(
+            request.conversation_id,
+            title=request.request,
+        )
         try:
             validate_agent_plan_request(request)
         except AgentRequestRejected as exc:
-            return self._record_rejected_plan(request, str(exc))
+            return self._record_rejected_plan(
+                request,
+                str(exc),
+                conversation_id=conversation_id,
+            )
 
         planned = self.planner.plan(request)
         for action in planned.actions:
@@ -66,6 +81,7 @@ class AgentService:
         actions = [action.model_dump(mode="json") for action in planned.actions]
         task = {
             "task_id": task_id,
+            "conversation_id": conversation_id,
             "request": request.request,
             "status": AgentTaskStatus.PLANNED.value,
             "permission_level": int(request.permission_level),
@@ -94,7 +110,49 @@ class AgentService:
             "cancel_requested": False,
         }
         self._write_task(task)
+        self._append_task_to_conversation(conversation_id, task_id)
         return AgentTaskResponse.model_validate(task)
+
+    def create_conversation(self, title: str | None = None) -> AgentConversationSummary:
+        conversation_id = self._new_conversation_id()
+        timestamp = datetime.now(timezone.utc).isoformat()
+        record = {
+            "conversation_id": conversation_id,
+            "title": self._conversation_title(title),
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "task_ids": [],
+        }
+        self._write_conversation(record)
+        return self._conversation_summary(record, [])
+
+    def list_conversations(self, limit: int = 50) -> AgentConversationListResponse:
+        conversations: list[AgentConversationSummary] = []
+        skipped_files = 0
+        paths = sorted(
+            self.settings.agent_conversations_dir.glob("CV-*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for path in paths:
+            if len(conversations) >= limit:
+                break
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                tasks = self._conversation_tasks(record)
+                conversations.append(self._conversation_summary(record, tasks))
+            except (OSError, json.JSONDecodeError, ValueError, AgentTaskNotFound):
+                skipped_files += 1
+        return AgentConversationListResponse(
+            conversations=conversations,
+            skipped_files=skipped_files,
+        )
+
+    def get_conversation(self, conversation_id: str) -> AgentConversationDetail:
+        record = self._read_conversation(conversation_id)
+        tasks = self._conversation_tasks(record)
+        summary = self._conversation_summary(record, tasks)
+        return AgentConversationDetail(**summary.model_dump(), tasks=tasks)
 
     def get_task(self, task_id: str) -> AgentTaskResponse:
         return AgentTaskResponse.model_validate(self._read_task(task_id))
@@ -212,11 +270,14 @@ class AgentService:
         self,
         request: AgentPlanRequest,
         message: str,
+        *,
+        conversation_id: str,
     ) -> AgentTaskResponse:
         task_id = self._new_task_id()
         timestamp = datetime.now(timezone.utc).isoformat()
         task = {
             "task_id": task_id,
+            "conversation_id": conversation_id,
             "request": request.request,
             "status": AgentTaskStatus.FAILED.value,
             "permission_level": int(request.permission_level),
@@ -247,7 +308,74 @@ class AgentService:
             "cancel_requested": False,
         }
         self._write_task(task)
+        self._append_task_to_conversation(conversation_id, task_id)
         return AgentTaskResponse.model_validate(task)
+
+    def _ensure_conversation(self, conversation_id: str | None, *, title: str) -> str:
+        if conversation_id:
+            self._read_conversation(conversation_id)
+            return conversation_id
+        return self.create_conversation(title=title).conversation_id
+
+    def _append_task_to_conversation(self, conversation_id: str, task_id: str) -> None:
+        with self._lock:
+            record = self._read_conversation(conversation_id)
+            task_ids = record.setdefault("task_ids", [])
+            if not task_ids and record.get("title") == "새 Agent 대화":
+                task = self._read_task(task_id)
+                record["title"] = self._conversation_title(task.get("request"))
+            if task_id not in task_ids:
+                task_ids.append(task_id)
+            record["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._write_conversation(record)
+
+    def _conversation_tasks(self, record: dict) -> list[AgentTaskResponse]:
+        return [self.get_task(str(task_id)) for task_id in record.get("task_ids", [])]
+
+    @staticmethod
+    def _conversation_summary(
+        record: dict,
+        tasks: list[AgentTaskResponse],
+    ) -> AgentConversationSummary:
+        return AgentConversationSummary(
+            conversation_id=record["conversation_id"],
+            title=record["title"],
+            created_at=record["created_at"],
+            updated_at=record["updated_at"],
+            task_count=len(tasks),
+            last_task_status=tasks[-1].status if tasks else None,
+        )
+
+    @staticmethod
+    def _conversation_title(value: str | None) -> str:
+        normalized = " ".join((value or "").split())
+        return normalized[:80] or "새 Agent 대화"
+
+    def _conversation_path(self, conversation_id: str) -> Path:
+        if not conversation_id.startswith("CV-") or any(
+            character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
+            for character in conversation_id
+        ):
+            raise AgentConversationNotFound(conversation_id)
+        return self.settings.agent_conversations_dir / f"{conversation_id}.json"
+
+    def _read_conversation(self, conversation_id: str) -> dict:
+        path = self._conversation_path(conversation_id)
+        with self._lock:
+            if not path.is_file():
+                raise AgentConversationNotFound(conversation_id)
+            return json.loads(path.read_text(encoding="utf-8"))
+
+    def _write_conversation(self, record: dict) -> None:
+        path = self._conversation_path(record["conversation_id"])
+        with self._lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(record, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temporary.replace(path)
 
     def _cancel_requested(self, task_id: str) -> bool:
         try:
@@ -290,9 +418,15 @@ class AgentService:
         now = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         return f"AT-{now}-{uuid4().hex[:6].upper()}"
 
+    @staticmethod
+    def _new_conversation_id() -> str:
+        now = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        return f"CV-{now}-{uuid4().hex[:6].upper()}"
+
 
 __all__ = [
     "AgentApprovalRequired",
+    "AgentConversationNotFound",
     "AgentPermissionError",
     "AgentSecurityError",
     "AgentService",
