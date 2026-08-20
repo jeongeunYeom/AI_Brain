@@ -37,6 +37,10 @@ class AgentChartType(str, Enum):
     HISTOGRAM = "histogram"
 
 
+class AgentAnalysisProfile(str, Enum):
+    MRST_CO2 = "mrst_co2"
+
+
 class AgentAction(BaseModel):
     action_id: str
     tool: AgentToolName
@@ -60,6 +64,7 @@ class AgentPlanRequest(BaseModel):
     x_column: str | None = Field(default=None, max_length=200)
     y_column: str | None = Field(default=None, max_length=200)
     chart_type: AgentChartType | None = None
+    analysis_profile: AgentAnalysisProfile | None = None
     content: str | None = Field(default=None, max_length=100_000)
     old_text: str | None = Field(default=None, max_length=50_000)
     new_text: str | None = Field(default=None, max_length=50_000)

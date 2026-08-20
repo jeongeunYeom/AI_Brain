@@ -676,6 +676,247 @@ def test_multi_csv_comparison_executes_and_validates_outputs(
     assert [float(row["mean"]) for row in rows] == [94.5, 89.0]
 
 
+def test_mrst_co2_plan_maps_domain_columns_and_three_outputs(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "MRST CO2 저장 결과를 분석해줘.",
+            "target_path": "co2_result.csv",
+            "analysis_profile": "mrst_co2",
+            "output_path": "results/storage_report.md",
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    task = response.json()
+    run_action = next(
+        action for action in task["actions"] if action["tool"] == "run_python"
+    )
+    assert run_action["arguments"]["analysis_profile"] == "mrst_co2"
+    assert run_action["arguments"]["column_maps"] == {
+        "co2_result.csv": {
+            "srco2": "srco2",
+            "trapped_ratio": "trapped_ratio",
+            "free_ratio": "free_ratio",
+            "total_storage": "total_storage_mt",
+        }
+    }
+    assert run_action["arguments"]["expected_outputs"] == [
+        "results/storage_report.csv",
+        "results/storage_report.png",
+        "results/storage_report.md",
+    ]
+    assert "원본 CSV를 변경하지 않고" in " ".join(task["plan"])
+
+
+def test_mrst_co2_plan_is_inferred_from_domain_analysis_request(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "co2_result.csv의 잔류 포화도별 포획 비율 경향을 분석해줘.",
+            "target_path": "co2_result.csv",
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    run_action = next(
+        action
+        for action in response.json()["actions"]
+        if action["tool"] == "run_python"
+    )
+    assert run_action["arguments"]["analysis_profile"] == "mrst_co2"
+
+
+def test_mrst_co2_direct_ratios_execute_and_validate_all_outputs(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+    planned = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "MRST CO2 결과를 전용 분석해줘.",
+            "target_path": "co2_result.csv",
+            "analysis_profile": "mrst_co2",
+            "permission_level": 3,
+        },
+    )
+    assert planned.status_code == 201, planned.text
+    task = planned.json()
+
+    executed = client.post(
+        f"/api/agent/tasks/{task['task_id']}/execute",
+        json={"approved": True},
+    )
+    assert executed.status_code == 200
+    result = wait_for_task(client, task["task_id"])
+
+    assert result["status"] == "completed", result.get("error")
+    assert result["validation_passed"] is True
+    expected = {
+        "results/mrst_co2_analysis.csv",
+        "results/mrst_co2_analysis.png",
+        "results/mrst_co2_analysis.md",
+    }
+    assert expected.issubset(result["created_files"])
+    summary = agent_settings.agent_workspace_dir / "results/mrst_co2_analysis.csv"
+    with summary.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert float(rows[0]["srco2"]) == pytest.approx(0.1)
+    assert float(rows[0]["trapped_ratio_pct"]) == pytest.approx(94.9)
+    assert float(rows[-1]["free_ratio_pct"]) == pytest.approx(28.2)
+    assert rows[0]["storage_unit"] == "Mt"
+    assert rows[0]["calculation_basis"] == "direct_ratio"
+    report = (
+        agent_settings.agent_workspace_dir / "results/mrst_co2_analysis.md"
+    ).read_text(encoding="utf-8")
+    assert "Pearson r=" in report
+    assert "does not establish causality" in report
+
+
+def test_mrst_co2_derives_ratios_from_amount_columns(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    (agent_settings.agent_workspace_dir / "mrst_amounts.csv").write_text(
+        "time_years,trapped_co2_mt,free_co2_mt,total_storage_mt\n"
+        "100,4,1,5\n"
+        "200,4.5,0.5,5\n",
+        encoding="utf-8",
+    )
+    planned = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "MRST 저장량 결과를 분석해줘.",
+            "target_path": "mrst_amounts.csv",
+            "analysis_profile": "mrst_co2",
+            "output_path": "results/amount_analysis.md",
+            "permission_level": 3,
+        },
+    )
+    assert planned.status_code == 201, planned.text
+    task = planned.json()
+    client.post(
+        f"/api/agent/tasks/{task['task_id']}/execute",
+        json={"approved": True},
+    )
+    result = wait_for_task(client, task["task_id"])
+    assert result["status"] == "completed", result.get("error")
+
+    summary = agent_settings.agent_workspace_dir / "results/amount_analysis.csv"
+    with summary.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [float(row["trapped_ratio_pct"]) for row in rows] == [80.0, 90.0]
+    assert [float(row["free_ratio_pct"]) for row in rows] == [20.0, 10.0]
+    assert all(
+        row["calculation_basis"] == "derived_from_trapped_and_free_amounts"
+        for row in rows
+    )
+
+
+def test_mrst_co2_normalizes_fraction_ratios_to_percent(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    (agent_settings.agent_workspace_dir / "fraction_ratios.csv").write_text(
+        "srco2,trapped_ratio,free_ratio\n0.1,0.8,0.2\n",
+        encoding="utf-8",
+    )
+    planned = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "MRST CO2 비율을 분석해줘.",
+            "target_path": "fraction_ratios.csv",
+            "analysis_profile": "mrst_co2",
+            "output_path": "results/fractions.md",
+            "permission_level": 3,
+        },
+    )
+    assert planned.status_code == 201, planned.text
+    task = planned.json()
+    client.post(
+        f"/api/agent/tasks/{task['task_id']}/execute",
+        json={"approved": True},
+    )
+    result = wait_for_task(client, task["task_id"])
+    assert result["status"] == "completed", result.get("error")
+
+    with (
+        agent_settings.agent_workspace_dir / "results/fractions.csv"
+    ).open("r", encoding="utf-8-sig", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert float(row["trapped_ratio_pct"]) == 80.0
+    assert float(row["free_ratio_pct"]) == 20.0
+
+
+def test_mrst_co2_multiple_files_infer_srco2_from_filenames(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    for filename, trapped in (("srco2_0.10.csv", 95), ("srco2_0.20.csv", 89)):
+        (agent_settings.agent_workspace_dir / filename).write_text(
+            f"trapped_ratio,free_ratio\n{trapped},{100 - trapped}\n",
+            encoding="utf-8",
+        )
+    planned = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "MRST CO2 조건별 결과를 분석해줘.",
+            "target_paths": ["srco2_0.10.csv", "srco2_0.20.csv"],
+            "analysis_profile": "mrst_co2",
+            "output_path": "results/conditions.md",
+            "permission_level": 3,
+        },
+    )
+    assert planned.status_code == 201, planned.text
+    task = planned.json()
+    client.post(
+        f"/api/agent/tasks/{task['task_id']}/execute",
+        json={"approved": True},
+    )
+    result = wait_for_task(client, task["task_id"])
+    assert result["status"] == "completed", result.get("error")
+
+    with (
+        agent_settings.agent_workspace_dir / "results/conditions.csv"
+    ).open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [float(row["srco2"]) for row in rows] == [0.1, 0.2]
+
+
+def test_mrst_co2_plan_rejects_csv_without_ratio_or_amount_columns(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    (agent_settings.agent_workspace_dir / "pressure.csv").write_text(
+        "time_years,pressure_bar\n100,250\n",
+        encoding="utf-8",
+    )
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "MRST CO2 결과를 분석해줘.",
+            "target_path": "pressure.csv",
+            "analysis_profile": "mrst_co2",
+            "permission_level": 3,
+        },
+    )
+    assert response.status_code == 400
+    assert "trapped/free" in response.json()["detail"]
+
+
 def test_scatter_plan_uses_explicit_columns(
     client: TestClient,
     agent_settings: Settings,

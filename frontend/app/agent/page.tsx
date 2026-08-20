@@ -70,6 +70,7 @@ export default function AgentPage() {
   const [chartType, setChartType] = useState<"auto" | AgentChartType>("auto");
   const [comparisonPaths, setComparisonPaths] = useState("");
   const [compareColumn, setCompareColumn] = useState("");
+  const [mrstCo2Analysis, setMrstCo2Analysis] = useState(false);
   const [csvColumns, setCsvColumns] = useState<string[]>([]);
   const [columnsLoading, setColumnsLoading] = useState(false);
   const [columnError, setColumnError] = useState<string | null>(null);
@@ -205,6 +206,7 @@ export default function AgentPage() {
     setChartType("auto");
     setComparisonPaths("");
     setCompareColumn("");
+    setMrstCo2Analysis(false);
     setColumnError(null);
 
     if (!path.toLowerCase().endsWith(".csv")) return;
@@ -253,6 +255,7 @@ export default function AgentPage() {
         x_column: xColumn || undefined,
         y_column: yColumn || undefined,
         chart_type: chartType === "auto" ? undefined : chartType,
+        analysis_profile: mrstCo2Analysis ? "mrst_co2" : undefined,
         content: content || undefined,
         old_text: oldText || undefined,
         new_text: newText || undefined,
@@ -704,6 +707,23 @@ export default function AgentPage() {
 
                 {isCsvTarget && (
                   <div className="rounded-2xl bg-indigo-50 p-4">
+                    <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-xl border border-indigo-100 bg-white p-3">
+                      <input
+                        type="checkbox"
+                        checked={mrstCo2Analysis}
+                        onChange={(event) => setMrstCo2Analysis(event.target.checked)}
+                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+                      />
+                      <span>
+                        <span className="block text-xs font-bold text-slate-700">
+                          MRST / CO₂ Storage 전용 분석
+                        </span>
+                        <span className="mt-1 block text-xs leading-5 text-slate-500">
+                          srCO₂·시간·포획/자유 비율 또는 양을 자동 인식해 요약 CSV,
+                          변화 PNG, 계산 근거 Markdown을 함께 만듭니다.
+                        </span>
+                      </span>
+                    </label>
                     <div className="grid gap-3 sm:grid-cols-3">
                       <label className="text-xs font-semibold text-slate-600">
                         그래프 종류
