@@ -11,7 +11,7 @@ AI_Brain의 목표는 단순한 질의응답을 넘어 PDF와 연구 데이터�
 - 사용자가 작업 계획과 실행 코드를 확인한 뒤 승인
 - 로컬 Ollama 모델을 사용하여 외부 API 비용 최소화
 - 모든 파일 작업을 제한된 workspace 안에서 수행하고 기록
-- 향후 MRST 결과 분석과 석유공학 전용 계산 도구로 확장
+- MRST/CO₂ 저장 결과 분석과 석유공학 전용 계산 도구로 확장
 
 ## 현재 제공 기능
 
@@ -41,6 +41,11 @@ AI_Brain의 목표는 단순한 질의응답을 넘어 PDF와 연구 데이터�
 - 한국어 요청에서 CSV 열 이름 인식
 - 여러 CSV의 공통 숫자 열 탐지와 파일별 최소·최대·평균 비교
 - 다중 CSV 비교 결과표와 PNG 그래프 동시 생성
+- MRST/CO₂ Storage 전용 분석 모드
+- `srco2`, 시간, trapped/free 비율 또는 양 열 자동 인식
+- 비율 정규화와 trapped/free 양 기반 포획 비율 계산
+- 조건·시간별 변화 분석 및 요약 CSV·PNG·Markdown 동시 생성
+- 계산 기준, 입력 단위, Pearson 상관과 비인과성 주의사항 기록
 - Agent에서 Text/Figure RAG 지식베이스 읽기 전용 검색
 - 관련 문헌의 문서명·페이지·근거 문장과 Figure 경로 반환
 - 새 파일 생성과 기존 파일 부분 수정
@@ -61,6 +66,17 @@ Agent 실행 흐름:
 → 안전성 검사 및 실행
 → 결과 검증
 → 작업 기록 저장
+```
+
+MRST/CO₂ 분석에서는 Agent 화면의 **MRST / CO₂ Storage 전용 분석**을
+선택합니다. 비율 값이 `0~1`이면 백분율로 환산하며, 비율 열 없이
+trapped/free 양 열만 있으면 두 값의 합을 분모로 비율을 계산합니다.
+원본 CSV는 수정하지 않고 기본적으로 다음 결과를 생성합니다.
+
+```text
+results/mrst_co2_analysis.csv  # 행별 정규화 결과와 계산 기준
+results/mrst_co2_analysis.png  # srCO₂ 또는 시간별 trapped/free 변화
+results/mrst_co2_analysis.md   # 통계·상관·열 매핑·가정 보고서
 ```
 
 ### 3. 결과 미리보기와 다운로드
@@ -285,11 +301,10 @@ python scripts/e2e/run_local_e2e.py
 
 ### 우선순위 3 · 석유공학 전문화
 
-- CO₂ 저장 효율 및 포획 비율 분석
 - Porosity, Permeability, BHP, Injection rate 분석
-- 단위 변환과 계산식 표시
-- MRST 결과 CSV 자동 분석
-- 비교표·그래프·기술 보고서 자동 생성
+- 석유공학 단위 변환과 추가 계산식 지원
+- MRST 결과 형식과 열 별칭 확대
+- 생성된 MRST 분석 결과를 RAG 문헌 근거와 자동 비교
 
 ### 우선순위 4 · Agent v2
 

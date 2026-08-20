@@ -2,6 +2,7 @@ import { API_BASE, requestJson } from "./http";
 
 export type AgentPermissionLevel = 1 | 2 | 3;
 export type AgentChartType = "scatter" | "line" | "bar" | "histogram";
+export type AgentAnalysisProfile = "mrst_co2";
 export type AgentTaskStatus =
   | "planned"
   | "running"
@@ -85,6 +86,7 @@ export type AgentPlanInput = {
   x_column?: string;
   y_column?: string;
   chart_type?: AgentChartType;
+  analysis_profile?: AgentAnalysisProfile;
   content?: string;
   old_text?: string;
   new_text?: string;

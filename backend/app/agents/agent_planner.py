@@ -9,6 +9,7 @@ from uuid import uuid4
 from app.agents.permission_manager import PermissionManager
 from app.models.agent_schemas import (
     AgentAction,
+    AgentAnalysisProfile,
     AgentChartType,
     AgentPlanRequest,
     AgentToolName,
@@ -66,6 +67,66 @@ _COLUMN_ALIASES = {
         "total storage",
         "총 저장량",
         "전체 저장량",
+    ),
+}
+
+_MRST_COLUMN_ALIASES = {
+    "srco2": _COLUMN_ALIASES["srco2"] + (
+        "sr_co2",
+        "residual gas saturation",
+        "residual saturation",
+    ),
+    "time": (
+        "time",
+        "time_years",
+        "simulation_time",
+        "simulation_time_years",
+        "year",
+        "years",
+        "시간",
+        "시간 년",
+        "시뮬레이션 시간",
+    ),
+    "trapped_ratio": _COLUMN_ALIASES["trapped_ratio"] + (
+        "trapped_co2_fraction",
+        "trapped_fraction",
+        "immobilized_co2_ratio",
+    ),
+    "free_ratio": _COLUMN_ALIASES["free_ratio"] + (
+        "free_co2_fraction",
+        "free_fraction",
+        "mobile_co2_ratio",
+        "mobile_ratio",
+    ),
+    "trapped_amount": (
+        "trapped_co2",
+        "trapped_co2_mt",
+        "trapped_mass",
+        "trapped_mass_mt",
+        "trapped_volume",
+        "immobilized_co2",
+        "포획 co2 양",
+        "포획 co2 질량",
+        "포획량",
+    ),
+    "free_amount": (
+        "free_co2",
+        "free_co2_mt",
+        "free_mass",
+        "free_mass_mt",
+        "free_volume",
+        "mobile_co2",
+        "자유 co2 양",
+        "자유 co2 질량",
+        "자유량",
+    ),
+    "total_storage": _COLUMN_ALIASES["total_storage_mt"] + (
+        "total_co2",
+        "total_co2_mt",
+        "stored_co2",
+        "stored_co2_mt",
+        "total_storage_mass",
+        "총 co2 저장량",
     ),
 }
 
@@ -163,6 +224,13 @@ class AgentPlanner:
                         preview=preview,
                     ),
                 ],
+            )
+
+        if self._looks_like_mrst_co2_analysis(request, lowered, target, targets):
+            return self._plan_mrst_co2_analysis(
+                text,
+                targets or ([target] if target else []),
+                output,
             )
 
         if self._looks_like_multi_csv_compare(request, lowered, targets):
@@ -404,6 +472,141 @@ class AgentPlanner:
         if csv_info.get("row_count", 0) == 0:
             raise ValueError("CSV에 데이터 행이 없습니다.")
         return csv_info
+
+    def _plan_mrst_co2_analysis(
+        self,
+        text: str,
+        targets: list[str],
+        output: str | None,
+    ) -> PlannedTask:
+        csv_paths = self._require_mrst_csv_targets(targets)
+        requested_output = output or "results/mrst_co2_analysis.md"
+        output_file = self.permissions.resolve_path(
+            requested_output,
+            must_exist=False,
+            allow_directory=False,
+            allowed_extensions={".md", ".csv", ".png"},
+        )
+        base_path = output_file.with_suffix("")
+        report_path = self.permissions.to_relative(base_path.with_suffix(".md"))
+        summary_path = self.permissions.to_relative(base_path.with_suffix(".csv"))
+        chart_path = self.permissions.to_relative(base_path.with_suffix(".png"))
+
+        column_maps: dict[str, dict[str, str]] = {}
+        condition_fallbacks: dict[str, float | None] = {}
+        for csv_path in csv_paths:
+            csv_info = self._csv_info(csv_path)
+            columns = [str(column) for column in csv_info["columns"]]
+            column_map = self._match_mrst_columns(columns)
+            has_ratio = bool(
+                column_map.get("trapped_ratio") or column_map.get("free_ratio")
+            )
+            has_amounts = bool(
+                column_map.get("trapped_amount") and column_map.get("free_amount")
+            )
+            if not has_ratio and not has_amounts:
+                raise ValueError(
+                    f"{csv_path}에서 trapped/free 비율 열 또는 "
+                    "trapped/free 양 열 쌍을 찾을 수 없습니다. "
+                    f"사용 가능한 열: {', '.join(columns)}"
+                )
+            column_maps[csv_path] = column_map
+            condition_fallbacks[csv_path] = self._srco2_from_filename(csv_path)
+
+        code = self._mrst_co2_analysis_code(
+            csv_paths,
+            column_maps,
+            condition_fallbacks,
+            summary_path,
+            chart_path,
+            report_path,
+        )
+        self.python_tools.validate(code)
+        read_actions = [
+            self._action(
+                AgentToolName.READ_FILE,
+                f"MRST 결과 CSV 구조 확인: {path}",
+                {"path": path, "start_line": 1, "end_line": 25},
+                target_files=[path],
+            )
+            for path in csv_paths
+        ]
+        run_action = self._action(
+            AgentToolName.RUN_PYTHON,
+            f"{len(csv_paths)}개 MRST/CO₂ 결과 CSV 분석",
+            {
+                "code": code,
+                "analysis_profile": AgentAnalysisProfile.MRST_CO2.value,
+                "input_paths": csv_paths,
+                "column_maps": column_maps,
+                "expected_outputs": [summary_path, chart_path, report_path],
+            },
+            target_files=[
+                *csv_paths,
+                summary_path,
+                chart_path,
+                report_path,
+            ],
+            requires_approval=True,
+            preview=code,
+        )
+        mapped_descriptions = [
+            f"{path}: "
+            + ", ".join(
+                f"{meaning}={column}" for meaning, column in column_maps[path].items()
+            )
+            for path in csv_paths
+        ]
+        return PlannedTask(
+            plan=[
+                f"{len(csv_paths)}개 원본 CSV를 변경하지 않고 구조와 데이터 행을 확인합니다.",
+                "MRST/CO₂ 의미 열을 자동 매핑합니다: "
+                + " | ".join(mapped_descriptions),
+                "직접 비율은 백분율로 정규화하고, 양 데이터는 trapped+free를 "
+                "분모로 비율을 계산합니다.",
+                f"행별 계산 근거가 포함된 요약표를 {summary_path}에 저장합니다.",
+                f"srCO₂ 또는 시간에 따른 trapped/free 변화 그래프를 {chart_path}에 저장합니다.",
+                f"통계·상관·가정이 포함된 보고서를 {report_path}에 저장하고 "
+                "세 결과물을 검증합니다.",
+            ],
+            actions=[*read_actions, run_action],
+        )
+
+    def _require_mrst_csv_targets(self, targets: list[str]) -> list[str]:
+        if not targets:
+            return [self.permissions.to_relative(self.permissions.find_first_file(".csv"))]
+        resolved: list[str] = []
+        for target in targets:
+            path = self.permissions.resolve_path(
+                target,
+                must_exist=True,
+                allow_directory=False,
+                allowed_extensions={".csv"},
+            )
+            relative = self.permissions.to_relative(path)
+            if relative not in resolved:
+                resolved.append(relative)
+        return resolved
+
+    @classmethod
+    def _match_mrst_columns(cls, columns: list[str]) -> dict[str, str]:
+        normalized_columns = {
+            cls._normalize_column_text(column): column for column in columns
+        }
+        matched: dict[str, str] = {}
+        for meaning, aliases in _MRST_COLUMN_ALIASES.items():
+            for alias in (meaning, *aliases):
+                column = normalized_columns.get(cls._normalize_column_text(alias))
+                if column is not None:
+                    matched[meaning] = column
+                    break
+        return matched
+
+    @staticmethod
+    def _srco2_from_filename(csv_path: str) -> float | None:
+        stem = Path(csv_path).stem.casefold().replace("co₂", "co2")
+        match = re.search(r"sr[_-]?co2(?:[_= -])?(\d+(?:\.\d+)?)", stem)
+        return float(match.group(1)) if match else None
 
     def _plan_multi_csv_comparison(
         self,
@@ -684,7 +887,8 @@ class AgentPlanner:
     @staticmethod
     def _normalize_column_text(value: str) -> str:
         lowered = value.casefold().replace("co₂", "co2")
-        return re.sub(r"[\s_\-]+", " ", lowered).strip()
+        lowered = re.sub(r"[^\w가-힣]+", " ", lowered)
+        return re.sub(r"[\s_]+", " ", lowered).strip()
 
     @staticmethod
     def _numeric_sample_columns(csv_info: dict) -> list[str]:
@@ -804,6 +1008,44 @@ class AgentPlanner:
             return True
         structure_terms = ("구조", "열 이름", "column", "행 수", "데이터 개수")
         return "분석" in text and not any(word in text for word in structure_terms)
+
+    @staticmethod
+    def _looks_like_mrst_co2_analysis(
+        request: AgentPlanRequest,
+        text: str,
+        target: str | None,
+        targets: list[str],
+    ) -> bool:
+        if request.analysis_profile == AgentAnalysisProfile.MRST_CO2:
+            return True
+        has_csv = bool(targets) or bool(target and target.lower().endswith(".csv"))
+        if not has_csv:
+            return False
+        domain_terms = (
+            "mrst",
+            "co2",
+            "co₂",
+            "지중 저장",
+            "지중저장",
+            "trapped_ratio",
+            "free_ratio",
+            "포획 비율",
+            "포획비율",
+            "잔류 포화도",
+        )
+        analysis_terms = (
+            "분석",
+            "요약",
+            "보고서",
+            "경향",
+            "추세",
+            "analyze",
+            "analysis",
+            "report",
+        )
+        return any(term in text for term in domain_terms) and any(
+            term in text for term in analysis_terms
+        )
 
     @staticmethod
     def _looks_like_multi_csv_compare(
@@ -990,6 +1232,297 @@ class AgentPlanner:
                 handle.write(chr(10).join(lines))
 
             print(f"Saved report: {{output_path}}")
+            """
+        ).strip()
+
+    @staticmethod
+    def _mrst_co2_analysis_code(
+        csv_paths: list[str],
+        column_maps: dict[str, dict[str, str]],
+        condition_fallbacks: dict[str, float | None],
+        summary_path: str,
+        chart_path: str,
+        report_path: str,
+    ) -> str:
+        return textwrap.dedent(
+            f"""
+            import csv
+            import statistics
+            import matplotlib.pyplot as plt
+
+            input_paths = {csv_paths!r}
+            column_maps = {column_maps!r}
+            condition_fallbacks = {condition_fallbacks!r}
+            summary_path = {summary_path!r}
+            chart_path = {chart_path!r}
+            report_path = {report_path!r}
+
+            def number(row, column):
+                if not column:
+                    return None
+                raw = (row.get(column) or "").strip()
+                if not raw:
+                    return None
+                try:
+                    return float(raw)
+                except ValueError:
+                    return None
+
+            def percent(value):
+                if value is None:
+                    return None
+                return value * 100.0 if abs(value) <= 1.0 else value
+
+            def formatted(value):
+                return "" if value is None else f"{{value:.12g}}"
+
+            def storage_unit(column):
+                lowered = (column or "").casefold().replace(" ", "_")
+                if "_mt" in lowered or "megaton" in lowered:
+                    return "Mt"
+                if "_kg" in lowered:
+                    return "kg"
+                if "tonne" in lowered or "_ton" in lowered:
+                    return "tonne"
+                if "volume" in lowered:
+                    return "input_volume_unit"
+                return "input_unit_unspecified"
+
+            def correlation(rows, x_key, y_key):
+                pairs = [
+                    (row[x_key], row[y_key])
+                    for row in rows
+                    if row[x_key] is not None and row[y_key] is not None
+                ]
+                if len(pairs) < 2:
+                    return None, len(pairs), "짝지어진 값이 2개 미만"
+                x_values = [pair[0] for pair in pairs]
+                y_values = [pair[1] for pair in pairs]
+                if len(set(x_values)) < 2 or len(set(y_values)) < 2:
+                    return None, len(pairs), "한 변수의 분산이 0"
+                return statistics.correlation(x_values, y_values), len(pairs), ""
+
+            result_rows = []
+            skipped_rows = []
+            ratio_sum_mismatch = 0
+
+            for input_path in input_paths:
+                mapping = column_maps[input_path]
+                with open(input_path, "r", encoding="utf-8-sig", newline="") as handle:
+                    rows = list(csv.DictReader(handle))
+                for row_index, row in enumerate(rows, start=1):
+                    trapped_amount = number(row, mapping.get("trapped_amount"))
+                    free_amount = number(row, mapping.get("free_amount"))
+                    trapped_ratio = percent(number(row, mapping.get("trapped_ratio")))
+                    free_ratio = percent(number(row, mapping.get("free_ratio")))
+                    basis = "direct_ratio"
+
+                    if trapped_ratio is None and free_ratio is not None:
+                        trapped_ratio = 100.0 - free_ratio
+                        basis = "direct_free_ratio_plus_complement"
+                    elif free_ratio is None and trapped_ratio is not None:
+                        free_ratio = 100.0 - trapped_ratio
+                        basis = "direct_trapped_ratio_plus_complement"
+                    elif trapped_ratio is None and free_ratio is None:
+                        if trapped_amount is None or free_amount is None:
+                            skipped_rows.append(f"{{input_path}} row {{row_index}}: ratio/amount missing")
+                            continue
+                        denominator = trapped_amount + free_amount
+                        if denominator == 0:
+                            skipped_rows.append(f"{{input_path}} row {{row_index}}: trapped+free is zero")
+                            continue
+                        trapped_ratio = trapped_amount / denominator * 100.0
+                        free_ratio = free_amount / denominator * 100.0
+                        basis = "derived_from_trapped_and_free_amounts"
+
+                    if abs((trapped_ratio + free_ratio) - 100.0) > 0.5:
+                        ratio_sum_mismatch += 1
+
+                    srco2 = number(row, mapping.get("srco2"))
+                    if srco2 is None:
+                        srco2 = condition_fallbacks.get(input_path)
+                    time_years = number(row, mapping.get("time"))
+                    total_storage = number(row, mapping.get("total_storage"))
+                    if total_storage is None and trapped_amount is not None and free_amount is not None:
+                        total_storage = trapped_amount + free_amount
+                    unit_column = (
+                        mapping.get("total_storage")
+                        or mapping.get("trapped_amount")
+                        or mapping.get("free_amount")
+                    )
+                    result_rows.append(
+                        {{
+                            "source_file": input_path,
+                            "row_index": row_index,
+                            "srco2": srco2,
+                            "time_years": time_years,
+                            "trapped_ratio_pct": trapped_ratio,
+                            "free_ratio_pct": free_ratio,
+                            "trapped_amount": trapped_amount,
+                            "free_amount": free_amount,
+                            "total_storage_value": total_storage,
+                            "storage_unit": storage_unit(unit_column),
+                            "calculation_basis": basis,
+                        }}
+                    )
+
+            if not result_rows:
+                raise ValueError("분석할 수 있는 MRST/CO2 데이터 행이 없습니다.")
+
+            fieldnames = [
+                "source_file",
+                "row_index",
+                "srco2",
+                "time_years",
+                "trapped_ratio_pct",
+                "free_ratio_pct",
+                "trapped_amount",
+                "free_amount",
+                "total_storage_value",
+                "storage_unit",
+                "calculation_basis",
+            ]
+            with open(summary_path, "w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                for result in result_rows:
+                    writer.writerow(
+                        {{
+                            key: formatted(result[key])
+                            if key in {{
+                                "srco2",
+                                "time_years",
+                                "trapped_ratio_pct",
+                                "free_ratio_pct",
+                                "trapped_amount",
+                                "free_amount",
+                                "total_storage_value",
+                            }}
+                            else result[key]
+                            for key in fieldnames
+                        }}
+                    )
+
+            srco2_points = [row for row in result_rows if row["srco2"] is not None]
+            time_points = [row for row in result_rows if row["time_years"] is not None]
+            plt.figure(figsize=(9, 5.5))
+            if len(srco2_points) >= 2 and len(set(row["srco2"] for row in srco2_points)) >= 2:
+                plotted = sorted(srco2_points, key=lambda row: row["srco2"])
+                x_values = [row["srco2"] for row in plotted]
+                x_label = "Residual CO2 saturation (srCO2)"
+            elif len(time_points) >= 2 and len(set(row["time_years"] for row in time_points)) >= 2:
+                plotted = sorted(time_points, key=lambda row: row["time_years"])
+                x_values = [row["time_years"] for row in plotted]
+                x_label = "Simulation time (years)"
+            else:
+                plotted = result_rows
+                x_values = list(range(1, len(plotted) + 1))
+                x_label = "Analyzed row"
+            plt.plot(
+                x_values,
+                [row["trapped_ratio_pct"] for row in plotted],
+                marker="o",
+                label="Trapped CO2",
+            )
+            plt.plot(
+                x_values,
+                [row["free_ratio_pct"] for row in plotted],
+                marker="o",
+                label="Free/mobile CO2",
+            )
+            plt.xlabel(x_label)
+            plt.ylabel("CO2 ratio (%)")
+            plt.title("MRST CO2 storage analysis")
+            plt.ylim(bottom=0)
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            plt.tight_layout()
+            with open(chart_path, "wb"):
+                pass
+            plt.savefig(chart_path, dpi=160)
+            plt.close()
+
+            trapped_values = [row["trapped_ratio_pct"] for row in result_rows]
+            free_values = [row["free_ratio_pct"] for row in result_rows]
+            storage_values = [
+                row["total_storage_value"]
+                for row in result_rows
+                if row["total_storage_value"] is not None
+            ]
+            lines = [
+                "# MRST / CO2 Storage Analysis",
+                "",
+                "## Inputs",
+                f"- Source CSV files: {{len(input_paths)}}",
+                f"- Analyzed rows: {{len(result_rows)}}",
+                f"- Skipped rows: {{len(skipped_rows)}}",
+            ]
+            for input_path in input_paths:
+                mapping_text = ", ".join(
+                    f"{{meaning}}={{column}}"
+                    for meaning, column in column_maps[input_path].items()
+                )
+                lines.append(f"- `{{input_path}}`: {{mapping_text}}")
+
+            lines.extend(
+                [
+                    "",
+                    "## Ratio summary",
+                    f"- Trapped CO2 (%): mean {{statistics.fmean(trapped_values):.6g}}, "
+                    f"min {{min(trapped_values):.6g}}, max {{max(trapped_values):.6g}}",
+                    f"- Free/mobile CO2 (%): mean {{statistics.fmean(free_values):.6g}}, "
+                    f"min {{min(free_values):.6g}}, max {{max(free_values):.6g}}",
+                    f"- Rows where trapped + free differs from 100% by more than 0.5%p: "
+                    f"{{ratio_sum_mismatch}}",
+                ]
+            )
+            if storage_values:
+                units = sorted(set(row["storage_unit"] for row in result_rows if row["total_storage_value"] is not None))
+                lines.extend(
+                    [
+                        "",
+                        "## Storage summary",
+                        f"- Input units: {{', '.join(units)}}",
+                        f"- Total storage input value: mean {{statistics.fmean(storage_values):.6g}}, "
+                        f"min {{min(storage_values):.6g}}, max {{max(storage_values):.6g}}",
+                    ]
+                )
+
+            lines.extend(["", "## Correlation and trend"])
+            for x_key, x_label_text in (("srco2", "srCO2"), ("time_years", "time_years")):
+                for y_key, y_label_text in (("trapped_ratio_pct", "trapped ratio"), ("free_ratio_pct", "free ratio")):
+                    value, count, reason = correlation(result_rows, x_key, y_key)
+                    if value is None:
+                        lines.append(f"- {{x_label_text}} vs {{y_label_text}}: not calculated ({{reason}}, n={{count}})")
+                    else:
+                        direction = "positive" if value > 0 else "negative" if value < 0 else "none"
+                        lines.append(f"- {{x_label_text}} vs {{y_label_text}}: Pearson r={{value:.6g}} (n={{count}}, {{direction}} correlation)")
+
+            lines.extend(
+                [
+                    "",
+                    "## Calculation rules and assumptions",
+                    "- Original CSV files were read only and were not modified.",
+                    "- Direct ratio values with absolute value <= 1 were interpreted as fractions and multiplied by 100.",
+                    "- If only one direct ratio was present, the other was calculated as 100 minus that ratio.",
+                    "- Amount-based ratios used trapped / (trapped + free) and free / (trapped + free).",
+                    "- `storage_unit=input_unit_unspecified` means the source column did not encode a recognized unit.",
+                    "- Correlation describes only the supplied input data and does not establish causality.",
+                    "",
+                    "## Outputs",
+                    f"- Processed summary: `{{summary_path}}`",
+                    f"- Ratio chart: `{{chart_path}}`",
+                ]
+            )
+            if skipped_rows:
+                lines.extend(["", "## Skipped rows", *[f"- {{item}}" for item in skipped_rows]])
+
+            with open(report_path, "w", encoding="utf-8") as handle:
+                handle.write(chr(10).join(lines))
+
+            print(f"Saved MRST summary: {{summary_path}}")
+            print(f"Saved MRST chart: {{chart_path}}")
+            print(f"Saved MRST report: {{report_path}}")
             """
         ).strip()
 
