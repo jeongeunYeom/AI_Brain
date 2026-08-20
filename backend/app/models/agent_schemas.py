@@ -23,6 +23,8 @@ class AgentTaskStatus(str, Enum):
 class AgentToolName(str, Enum):
     LIST_DIRECTORY = "list_directory"
     READ_FILE = "read_file"
+    SEARCH_KNOWLEDGE_BASE = "search_knowledge_base"
+    GET_RELATED_FIGURES = "get_related_figures"
     CREATE_FILE = "create_file"
     EDIT_FILE = "edit_file"
     RUN_PYTHON = "run_python"

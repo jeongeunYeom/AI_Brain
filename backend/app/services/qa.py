@@ -140,6 +140,33 @@ class QAService:
         self.engineering_validator = EngineeringValidator()
         self.agent_run_logger = AgentRunLogger(agent_runs_dir)
 
+    def retrieve_evidence(
+        self,
+        question: str,
+        top_k: int | None = None,
+    ) -> dict:
+        """Retrieve text and Figure evidence without calling an LLM."""
+        prepared = self._prepare_generation(question, top_k)
+        query_type = prepared["query_type"]
+        if isinstance(query_type, QueryType):
+            query_type = query_type.value
+
+        return {
+            "query": question,
+            "query_type": query_type,
+            "sources": [
+                self._source_to_dict(source)
+                for source in prepared["sources"]
+            ],
+            "figures": [
+                figure.model_dump(mode="json")
+                for figure in prepared["figures"]
+            ],
+            "retrieval_elapsed_seconds": prepared[
+                "retrieval_elapsed_seconds"
+            ],
+        }
+
     async def answer(
         self,
         question: str,

@@ -39,6 +39,8 @@ AI_Brain의 목표는 단순한 질의응답을 넘어 PDF와 연구 데이터�
 - PNG 산점도 생성
 - X축·Y축 열 직접 선택
 - 한국어 요청에서 CSV 열 이름 인식
+- Agent에서 Text/Figure RAG 지식베이스 읽기 전용 검색
+- 관련 문헌의 문서명·페이지·근거 문장과 Figure 경로 반환
 - 새 파일 생성과 기존 파일 부분 수정
 - 수정 전 원본 자동 백업
 - 제한된 Python 데이터 분석 실행
@@ -66,6 +68,9 @@ Agent 실행 흐름:
 
 ### 4. 작업 기록
 
+- 하나의 Agent 대화에 여러 작업 누적
+- 새 대화 생성, 과거 대화 목록 및 대화 전체 복원
+- 대화별 작업 기록 연결
 - 최근 Agent 작업 50개를 최신순으로 표시
 - `completed`, `failed`, `canceled` 상태 확인
 - 요청 내용, 생성 시각과 실행 시간 표시
@@ -122,7 +127,7 @@ AI_Brain/
 │  ├─ app/agents/          # Agent 계획·권한·실행
 │  ├─ app/api/             # RAG, Agent, Figure API
 │  ├─ app/services/        # 검색·문서·평가 서비스
-│  ├─ app/tools/           # 파일·폴더·Python 도구
+│  ├─ app/tools/           # 파일·폴더·Python·RAG 검색 도구
 │  └─ tests/
 ├─ frontend/
 │  ├─ app/                 # RAG, Agent, Review, Evaluation 화면

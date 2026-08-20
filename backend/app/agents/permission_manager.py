@@ -44,6 +44,8 @@ _SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 _TOOL_LEVELS = {
     AgentToolName.LIST_DIRECTORY: AgentPermissionLevel.READ_ONLY,
     AgentToolName.READ_FILE: AgentPermissionLevel.READ_ONLY,
+    AgentToolName.SEARCH_KNOWLEDGE_BASE: AgentPermissionLevel.READ_ONLY,
+    AgentToolName.GET_RELATED_FIGURES: AgentPermissionLevel.READ_ONLY,
     AgentToolName.CREATE_FILE: AgentPermissionLevel.SAFE_CREATE,
     AgentToolName.EDIT_FILE: AgentPermissionLevel.APPROVED_EXECUTION,
     AgentToolName.RUN_PYTHON: AgentPermissionLevel.APPROVED_EXECUTION,
