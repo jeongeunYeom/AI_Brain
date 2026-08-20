@@ -32,6 +32,8 @@ export type AgentAction = {
 export type AgentTask = {
   task_id: string;
   conversation_id?: string | null;
+  context_source_task_id?: string | null;
+  context_files: string[];
   request: string;
   status: AgentTaskStatus;
   permission_level: AgentPermissionLevel;

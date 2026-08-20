@@ -173,6 +173,122 @@ def test_conversation_list_is_newest_first(client: TestClient) -> None:
     ]
 
 
+def test_conversation_follow_up_reuses_previous_csv_without_reselecting_file(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    target = agent_settings.agent_workspace_dir / "result.csv"
+    target.write_text(
+        "porosity,permeability\n0.10,10\n0.20,50\n0.30,120\n",
+        encoding="utf-8",
+    )
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "저류층 물성 분석"},
+    ).json()["conversation_id"]
+    first = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "result.csv 구조를 확인해줘.",
+            "conversation_id": conversation_id,
+            "target_path": "result.csv",
+            "permission_level": 1,
+        },
+    ).json()
+    started = client.post(
+        f"/api/agent/tasks/{first['task_id']}/execute",
+        json={"approved": False},
+    )
+    assert started.status_code == 200
+    assert wait_for_task(client, first["task_id"])["status"] == "completed"
+
+    follow_up = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "아까 결과에서 porosity와 permeability 관계를 산점도로 만들어줘.",
+            "conversation_id": conversation_id,
+            "x_column": "porosity",
+            "y_column": "permeability",
+            "permission_level": 3,
+        },
+    )
+
+    assert follow_up.status_code == 201
+    task = follow_up.json()
+    assert task["context_source_task_id"] == first["task_id"]
+    assert task["context_files"] == ["result.csv"]
+    assert task["actions"][0]["arguments"]["path"] == "result.csv"
+    assert task["actions"][1]["tool"] == "run_python"
+
+
+def test_conversation_follow_up_requires_a_previous_usable_file(
+    client: TestClient,
+) -> None:
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "빈 대화"},
+    ).json()["conversation_id"]
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "아까 결과를 그래프로 만들어줘.",
+            "conversation_id": conversation_id,
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "대상 파일을 직접 선택" in response.json()["detail"]
+
+
+def test_explicit_target_takes_priority_over_conversation_context(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    for name in ("first.csv", "second.csv"):
+        (agent_settings.agent_workspace_dir / name).write_text(
+            "x,y\n1,2\n2,4\n",
+            encoding="utf-8",
+        )
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "명시 경로 우선"},
+    ).json()["conversation_id"]
+    first = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "first.csv 구조를 확인해줘.",
+            "conversation_id": conversation_id,
+            "target_path": "first.csv",
+            "permission_level": 1,
+        },
+    ).json()
+    client.post(
+        f"/api/agent/tasks/{first['task_id']}/execute",
+        json={"approved": False},
+    )
+    assert wait_for_task(client, first["task_id"])["status"] == "completed"
+
+    follow_up = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "아까 결과 대신 이 파일을 그래프로 만들어줘.",
+            "conversation_id": conversation_id,
+            "target_path": "second.csv",
+            "x_column": "x",
+            "y_column": "y",
+            "permission_level": 3,
+        },
+    )
+
+    assert follow_up.status_code == 201
+    task = follow_up.json()
+    assert task["context_source_task_id"] is None
+    assert task["context_files"] == []
+    assert task["actions"][0]["arguments"]["path"] == "second.csv"
+
+
 def test_agent_run_history_is_newest_first_and_skips_invalid_files(
     client: TestClient,
     agent_settings: Settings,
