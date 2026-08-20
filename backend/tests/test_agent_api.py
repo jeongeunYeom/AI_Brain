@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 import os
 import time
@@ -56,6 +57,24 @@ def write_co2_csv(agent_settings: Settings) -> Path:
         encoding="utf-8",
     )
     return target
+
+
+def write_comparison_csvs(agent_settings: Settings) -> tuple[Path, Path]:
+    first = agent_settings.agent_workspace_dir / "srco2_0.10.csv"
+    second = agent_settings.agent_workspace_dir / "srco2_0.20.csv"
+    first.write_text(
+        "step,trapped_ratio,free_ratio\n"
+        "1,94.0,6.0\n"
+        "2,95.0,5.0\n",
+        encoding="utf-8",
+    )
+    second.write_text(
+        "step,trapped_ratio,free_ratio\n"
+        "1,88.0,12.0\n"
+        "2,90.0,10.0\n",
+        encoding="utf-8",
+    )
+    return first, second
 
 
 def test_agent_routes_are_registered() -> None:
@@ -320,6 +339,27 @@ def test_unsafe_path_requests_are_recorded_as_failed(
     assert (agent_settings.agent_runs_dir / f"{task['task_id']}.json").is_file()
 
 
+def test_multi_csv_request_rejects_unsafe_target_path(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "두 CSV를 비교해줘.",
+            "target_paths": ["safe.csv", "../outside.csv"],
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    assert task["status"] == "failed"
+    assert "workspace" in task["error"]
+    assert task["actions"] == []
+    assert (agent_settings.agent_runs_dir / f"{task['task_id']}.json").is_file()
+
+
 def test_rejected_task_cannot_be_executed(client: TestClient) -> None:
     planned = client.post(
         "/api/agent/plan",
@@ -376,6 +416,29 @@ def test_safe_directory_request_still_uses_list_directory(client: TestClient) ->
     task = response.json()
     assert task["status"] == "planned"
     assert task["required_tools"] == ["list_directory"]
+
+
+def test_non_csv_path_in_request_still_uses_file_reader(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    (agent_settings.agent_workspace_dir / "notes.txt").write_text(
+        "safe notes",
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "notes.txt 파일을 읽어줘.",
+            "permission_level": 1,
+        },
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    assert task["required_tools"] == ["read_file"]
+    assert task["actions"][0]["arguments"]["path"] == "notes.txt"
 
 
 def test_knowledge_search_plan_is_read_only(client: TestClient) -> None:
@@ -461,6 +524,156 @@ def test_csv_columns_endpoint(
         "path": "co2_result.csv",
         "columns": ["srco2", "trapped_ratio", "free_ratio", "total_storage_mt"],
     }
+
+
+def test_multi_csv_plan_uses_common_numeric_column(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_comparison_csvs(agent_settings)
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "두 CSV의 포획 비율을 비교해줘.",
+            "target_path": "srco2_0.10.csv",
+            "target_paths": ["srco2_0.10.csv", "srco2_0.20.csv"],
+            "compare_column": "trapped_ratio",
+            "output_path": "results/srco2_comparison.csv",
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    task = response.json()
+    read_actions = [
+        action for action in task["actions"] if action["tool"] == "read_file"
+    ]
+    run_action = next(
+        action for action in task["actions"] if action["tool"] == "run_python"
+    )
+    assert len(read_actions) == 2
+    assert run_action["arguments"]["input_paths"] == [
+        "srco2_0.10.csv",
+        "srco2_0.20.csv",
+    ]
+    assert run_action["arguments"]["compare_column"] == "trapped_ratio"
+    assert run_action["arguments"]["common_columns"] == [
+        "step",
+        "trapped_ratio",
+        "free_ratio",
+    ]
+    assert run_action["arguments"]["expected_outputs"] == [
+        "results/srco2_comparison.csv",
+        "results/srco2_comparison.png",
+    ]
+    assert "statistics.fmean" in run_action["preview"]
+
+
+def test_multi_csv_plan_infers_paths_and_korean_column_alias(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_comparison_csvs(agent_settings)
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": (
+                "srco2_0.10.csv와 srco2_0.20.csv의 "
+                "포획된 CO₂ 비율을 비교해줘."
+            ),
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    run_action = next(
+        action
+        for action in response.json()["actions"]
+        if action["tool"] == "run_python"
+    )
+    assert run_action["arguments"]["compare_column"] == "trapped_ratio"
+    assert run_action["arguments"]["input_paths"] == [
+        "srco2_0.10.csv",
+        "srco2_0.20.csv",
+    ]
+
+
+def test_multi_csv_plan_rejects_files_without_common_numeric_column(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    (agent_settings.agent_workspace_dir / "pressure.csv").write_text(
+        "pressure\n100\n",
+        encoding="utf-8",
+    )
+    (agent_settings.agent_workspace_dir / "facies.csv").write_text(
+        "facies\nsand\n",
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "두 CSV를 비교해줘.",
+            "target_paths": ["pressure.csv", "facies.csv"],
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "공통 숫자 열" in response.json()["detail"]
+
+
+def test_multi_csv_comparison_executes_and_validates_outputs(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_comparison_csvs(agent_settings)
+
+    planned = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "조건별 trapped_ratio를 비교해줘.",
+            "target_paths": ["srco2_0.10.csv", "srco2_0.20.csv"],
+            "compare_column": "trapped_ratio",
+            "output_path": "results/srco2_comparison.csv",
+            "permission_level": 3,
+        },
+    )
+    assert planned.status_code == 201, planned.text
+    task = planned.json()
+
+    executed = client.post(
+        f"/api/agent/tasks/{task['task_id']}/execute",
+        json={"approved": True},
+    )
+    assert executed.status_code == 200
+    result = wait_for_task(client, task["task_id"])
+
+    assert result["status"] == "completed", result.get("error")
+    assert result["validation_passed"] is True
+    assert {
+        "results/srco2_comparison.csv",
+        "results/srco2_comparison.png",
+    }.issubset(result["created_files"])
+    checks = [
+        check
+        for record in result["validation_records"]
+        for check in record["checks"]
+    ]
+    assert any(check["name"] == "csv_content" and check["passed"] for check in checks)
+    assert any(check["name"] == "png_integrity" and check["passed"] for check in checks)
+
+    output = agent_settings.agent_workspace_dir / "results/srco2_comparison.csv"
+    with output.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["source_file"] for row in rows] == [
+        "srco2_0.10.csv",
+        "srco2_0.20.csv",
+    ]
+    assert [float(row["mean"]) for row in rows] == [94.5, 89.0]
 
 
 def test_scatter_plan_uses_explicit_columns(

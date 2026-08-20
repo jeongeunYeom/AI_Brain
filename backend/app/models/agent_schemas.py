@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum, IntEnum
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
 
@@ -51,7 +51,12 @@ class AgentPlanRequest(BaseModel):
     request: str = Field(min_length=1, max_length=4000)
     conversation_id: str | None = Field(default=None, pattern=r"^CV-[A-Z0-9-]+$")
     target_path: str | None = Field(default=None, max_length=500)
+    target_paths: list[Annotated[str, Field(max_length=500)]] = Field(
+        default_factory=list,
+        max_length=10,
+    )
     output_path: str | None = Field(default=None, max_length=500)
+    compare_column: str | None = Field(default=None, max_length=200)
     x_column: str | None = Field(default=None, max_length=200)
     y_column: str | None = Field(default=None, max_length=200)
     chart_type: AgentChartType | None = None
