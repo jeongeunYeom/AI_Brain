@@ -57,6 +57,19 @@ export type AgentTask = {
     description: string;
     result: Record<string, unknown>;
   }>;
+  validation_passed?: boolean | null;
+  validation_records: Array<{
+    action_id: string;
+    tool: AgentToolName;
+    passed: boolean;
+    checks: Array<{
+      name: string;
+      passed: boolean;
+      detail: string;
+      path?: string;
+    }>;
+    errors: string[];
+  }>;
   error?: string | null;
   cancel_requested: boolean;
 };

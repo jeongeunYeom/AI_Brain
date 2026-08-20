@@ -3,6 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.agents.permission_manager import PermissionManager
+from app.agents.result_validator import (
+    AgentResultValidationError,
+    AgentResultValidator,
+)
 from app.agents.tool_registry import ToolRegistry
 from app.models.agent_schemas import (
     AgentAction,
@@ -16,9 +20,14 @@ class AgentExecutor:
         self,
         permissions: PermissionManager,
         tools: ToolRegistry,
+        validator: AgentResultValidator | None = None,
     ):
         self.permissions = permissions
         self.tools = tools
+        self.validator = validator or AgentResultValidator(
+            tools.settings,
+            permissions,
+        )
 
     def execute(self, task: dict, *, is_canceled=None, on_progress=None) -> dict:
         permission_level = AgentPermissionLevel(task["permission_level"])
@@ -30,12 +39,15 @@ class AgentExecutor:
         task["progress_total"] = len(actions)
         task["progress_step"] = 0
         task["current_action"] = None
+        task["validation_passed"] = None
+        task["validation_records"] = []
         if on_progress:
             on_progress(task)
 
         for index, action in enumerate(actions, start=1):
             if task.get("cancel_requested") or (is_canceled and is_canceled()):
                 task["status"] = AgentTaskStatus.CANCELED.value
+                task["validation_passed"] = None
                 task["completed_at"] = datetime.now(timezone.utc).isoformat()
                 task["current_action"] = None
                 if on_progress:
@@ -47,8 +59,17 @@ class AgentExecutor:
             if on_progress:
                 on_progress(task)
 
-            self.permissions.require_tool_level(permission_level, action.tool)
-            result = self.tools.execute(action, task_id=task["task_id"])
+            try:
+                self.permissions.require_tool_level(permission_level, action.tool)
+                result = self.tools.execute(action, task_id=task["task_id"])
+            except Exception as exc:
+                task["validation_passed"] = False
+                task["validation_records"].append(
+                    self.validator.execution_failure(action, exc)
+                )
+                if on_progress:
+                    on_progress(task)
+                raise
             task.setdefault("tools_used", []).append(action.tool.value)
             task.setdefault("results", []).append(
                 {
@@ -71,13 +92,19 @@ class AgentExecutor:
                         "stderr_record": result.get("stderr_record"),
                     }
                 )
-                if not result.get("success"):
-                    raise RuntimeError(
-                        result.get("stderr") or "Python execution failed."
+            validation = self.validator.validate_action(action, result)
+            if validation is not None:
+                task["validation_records"].append(validation)
+                task["validation_passed"] = validation["passed"]
+                if not validation["passed"]:
+                    message = "; ".join(validation["errors"])
+                    raise AgentResultValidationError(
+                        f"결과 자동 검증 실패: {message}"
                     )
             if on_progress:
                 on_progress(task)
 
+        task["validation_passed"] = True
         task["status"] = AgentTaskStatus.COMPLETED.value
         task["current_action"] = None
         task["completed_at"] = datetime.now(timezone.utc).isoformat()

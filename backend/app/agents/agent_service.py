@@ -106,6 +106,8 @@ class AgentService:
             "backups": [],
             "execution_records": [],
             "results": [],
+            "validation_passed": None,
+            "validation_records": [],
             "error": None,
             "cancel_requested": False,
         }
@@ -200,6 +202,8 @@ class AgentService:
             )
         except Exception as exc:
             task["status"] = AgentTaskStatus.FAILED.value
+            if task.get("validation_passed") is None:
+                task["validation_passed"] = False
             task["error"] = str(exc)
             task["current_action"] = None
             task["completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -304,6 +308,8 @@ class AgentService:
             "backups": [],
             "execution_records": [],
             "results": [],
+            "validation_passed": None,
+            "validation_records": [],
             "error": message,
             "cancel_requested": False,
         }
