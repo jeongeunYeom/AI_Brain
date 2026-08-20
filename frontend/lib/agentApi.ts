@@ -1,6 +1,7 @@
 import { API_BASE, requestJson } from "./http";
 
 export type AgentPermissionLevel = 1 | 2 | 3;
+export type AgentChartType = "scatter" | "line" | "bar" | "histogram";
 export type AgentTaskStatus =
   | "planned"
   | "running"
@@ -81,6 +82,7 @@ export type AgentPlanInput = {
   output_path?: string;
   x_column?: string;
   y_column?: string;
+  chart_type?: AgentChartType;
   content?: string;
   old_text?: string;
   new_text?: string;

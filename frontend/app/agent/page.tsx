@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AppIconRail, MobileModeTabs } from "@/components/AppNavigation";
 import {
+  AgentChartType,
   AgentPermissionLevel,
   AgentFilePreview,
   AgentConversationSummary,
@@ -59,6 +60,7 @@ export default function AgentPage() {
   const [outputPath, setOutputPath] = useState("");
   const [xColumn, setXColumn] = useState("");
   const [yColumn, setYColumn] = useState("");
+  const [chartType, setChartType] = useState<"auto" | AgentChartType>("auto");
   const [csvColumns, setCsvColumns] = useState<string[]>([]);
   const [columnsLoading, setColumnsLoading] = useState(false);
   const [columnError, setColumnError] = useState<string | null>(null);
@@ -191,6 +193,7 @@ export default function AgentPage() {
     setCsvColumns([]);
     setXColumn("");
     setYColumn("");
+    setChartType("auto");
     setColumnError(null);
 
     if (!path.toLowerCase().endsWith(".csv")) return;
@@ -230,6 +233,7 @@ export default function AgentPage() {
         output_path: outputPath.trim() || undefined,
         x_column: xColumn || undefined,
         y_column: yColumn || undefined,
+        chart_type: chartType === "auto" ? undefined : chartType,
         content: content || undefined,
         old_text: oldText || undefined,
         new_text: newText || undefined,
@@ -681,9 +685,27 @@ export default function AgentPage() {
 
                 {isCsvTarget && (
                   <div className="rounded-2xl bg-indigo-50 p-4">
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-3 sm:grid-cols-3">
                       <label className="text-xs font-semibold text-slate-600">
-                        X축 열
+                        그래프 종류
+                        <select
+                          value={chartType}
+                          onChange={(event) => {
+                            const nextType = event.target.value as "auto" | AgentChartType;
+                            setChartType(nextType);
+                            if (nextType === "histogram") setYColumn("");
+                          }}
+                          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                        >
+                          <option value="auto">요청에서 자동 인식</option>
+                          <option value="scatter">산점도</option>
+                          <option value="line">선 그래프</option>
+                          <option value="bar">막대그래프</option>
+                          <option value="histogram">히스토그램</option>
+                        </select>
+                      </label>
+                      <label className="text-xs font-semibold text-slate-600">
+                        {chartType === "histogram" ? "분포를 확인할 열" : "X축 열"}
                         <select value={xColumn} onChange={(event) => setXColumn(event.target.value)} disabled={columnsLoading || csvColumns.length === 0} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm disabled:opacity-50">
                           <option value="">자동 인식</option>
                           {csvColumns.map((column) => <option key={column} value={column} disabled={column === yColumn}>{column}</option>)}
@@ -691,8 +713,8 @@ export default function AgentPage() {
                       </label>
                       <label className="text-xs font-semibold text-slate-600">
                         Y축 열
-                        <select value={yColumn} onChange={(event) => setYColumn(event.target.value)} disabled={columnsLoading || csvColumns.length === 0} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm disabled:opacity-50">
-                          <option value="">자동 인식</option>
+                        <select value={yColumn} onChange={(event) => setYColumn(event.target.value)} disabled={chartType === "histogram" || columnsLoading || csvColumns.length === 0} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm disabled:opacity-50">
+                          <option value="">{chartType === "histogram" ? "히스토그램에서는 사용 안 함" : "자동 인식"}</option>
                           {csvColumns.map((column) => <option key={column} value={column} disabled={column === xColumn}>{column}</option>)}
                         </select>
                       </label>

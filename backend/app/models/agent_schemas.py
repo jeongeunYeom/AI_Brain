@@ -30,6 +30,13 @@ class AgentToolName(str, Enum):
     RUN_PYTHON = "run_python"
 
 
+class AgentChartType(str, Enum):
+    SCATTER = "scatter"
+    LINE = "line"
+    BAR = "bar"
+    HISTOGRAM = "histogram"
+
+
 class AgentAction(BaseModel):
     action_id: str
     tool: AgentToolName
@@ -47,6 +54,7 @@ class AgentPlanRequest(BaseModel):
     output_path: str | None = Field(default=None, max_length=500)
     x_column: str | None = Field(default=None, max_length=200)
     y_column: str | None = Field(default=None, max_length=200)
+    chart_type: AgentChartType | None = None
     content: str | None = Field(default=None, max_length=100_000)
     old_text: str | None = Field(default=None, max_length=50_000)
     new_text: str | None = Field(default=None, max_length=50_000)
