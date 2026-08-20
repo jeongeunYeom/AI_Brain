@@ -18,7 +18,7 @@ export function AppIconRail() {
       <Link
         href="/"
         className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-sm font-black text-white shadow-sm"
-        aria-label="AI_Brain 홈"
+        aria-label="Petroleum RAG Agent 홈"
       >
         AI
       </Link>

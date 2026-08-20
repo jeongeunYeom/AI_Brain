@@ -41,7 +41,7 @@ def test_returns_existing_evidence_figure(tmp_path):
 
     service = make_service(tmp_path)
     figures = service._figure_references(
-        [figure_hit(r"D:\AI_Brain\data\figures\doc_p10_fig2.jpeg")]
+        [figure_hit(r"D:\petroleum-rag-agent\data\figures\doc_p10_fig2.jpeg")]
     )
 
     assert len(figures) == 1
@@ -62,7 +62,7 @@ def test_returns_preview_url_when_preview_creation_succeeds(tmp_path):
 
     service = make_service(tmp_path)
     figures = service._figure_references(
-        [figure_hit(r"D:\AI_Brain\data\figures\doc_p10_fig2.jpeg")]
+        [figure_hit(r"D:\petroleum-rag-agent\data\figures\doc_p10_fig2.jpeg")]
     )
 
     assert len(figures) == 1
@@ -79,7 +79,7 @@ def test_deduplicates_and_limits_to_three(tmp_path):
         (tmp_path / filename).write_bytes(b"image")
         hits.append(
             figure_hit(
-                rf"D:\AI_Brain\data\figures\{filename}",
+                rf"D:\petroleum-rag-agent\data\figures\{filename}",
                 title=f"Figure {index}",
             )
         )
@@ -102,7 +102,7 @@ def test_skips_missing_and_decoration_images(tmp_path):
     decoration.write_bytes(b"image")
 
     decoration_hit = figure_hit(
-        r"D:\AI_Brain\data\figures\decor.png",
+        r"D:\petroleum-rag-agent\data\figures\decor.png",
         title="null",
     )
     decoration_hit["text"] = decoration_hit["text"].replace(
@@ -111,7 +111,7 @@ def test_skips_missing_and_decoration_images(tmp_path):
     )
 
     missing_hit = figure_hit(
-        r"D:\AI_Brain\data\figures\missing.png"
+        r"D:\petroleum-rag-agent\data\figures\missing.png"
     )
 
     service = make_service(tmp_path)
@@ -131,11 +131,11 @@ def test_rft_comparison_orders_before_and_after_figures(tmp_path):
     Image.new("RGB", (80, 40), "white").save(after)
 
     before_hit = figure_hit(
-        r"D:\AI_Brain\data\figures\doc_p440_fig2.jpeg",
+        r"D:\petroleum-rag-agent\data\figures\doc_p440_fig2.jpeg",
         title="Appraisal Well RFT Survey",
     )
     after_hit = figure_hit(
-        r"D:\AI_Brain\data\figures\doc_p440_fig3.jpeg",
+        r"D:\petroleum-rag-agent\data\figures\doc_p440_fig3.jpeg",
         title="RFT Survey after Significant Production",
     )
 
@@ -180,11 +180,11 @@ def test_rft_comparison_fetches_missing_before_companion_from_collection(tmp_pat
     Image.new("RGB", (80, 40), "white").save(after)
 
     before_text = figure_hit(
-        r"D:\AI_Brain\data\figures\doc_p440_fig2.jpeg",
+        r"D:\petroleum-rag-agent\data\figures\doc_p440_fig2.jpeg",
         title="Appraisal Well RFT Survey",
     )["text"]
     after_hit = figure_hit(
-        r"D:\AI_Brain\data\figures\doc_p440_fig3.jpeg",
+        r"D:\petroleum-rag-agent\data\figures\doc_p440_fig3.jpeg",
         title="RFT Survey after Significant Production",
     )
     rows = [
