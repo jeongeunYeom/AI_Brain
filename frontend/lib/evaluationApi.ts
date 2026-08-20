@@ -4,6 +4,13 @@ export type BenchmarkSummary = {
   questions_total?: number;
   questions_completed?: number;
   infrastructure_errors?: number;
+  initial_answer_accuracy?: number | null;
+  answer_accuracy?: number | null;
+  hallucination_rate?: number | null;
+  retrieval_document_recall_at_k?: number | null;
+  retrieval_page_recall_at_k?: number | null;
+  figure_answer_accuracy?: number | null;
+  figure_retrieval_accuracy?: number | null;
   initial_benchmark_pass_rate?: number | null;
   final_benchmark_pass_rate?: number | null;
   initial_validator_pass_rate?: number | null;
@@ -22,6 +29,8 @@ export type BenchmarkSummary = {
     string,
     {
       total?: number;
+      answer_passed?: number;
+      answer_accuracy?: number | null;
       final_passed?: number;
       final_pass_rate?: number | null;
     }
@@ -41,9 +50,16 @@ export type BenchmarkAttempt = {
 export type BenchmarkResult = {
   id: string;
   category?: string | null;
+  question_type?: "text" | "figure" | "hallucination" | null;
+  concept_group?: string | null;
+  condition?: string | null;
+  mode?: "rag" | "ollama-direct" | null;
   question?: string | null;
   model?: string | null;
   expected_behavior?: string | null;
+  initial_answer_passed?: boolean | null;
+  final_answer_passed?: boolean | null;
+  hallucination_detected?: boolean | null;
   initial_validator_passed?: boolean | null;
   final_validator_passed?: boolean | null;
   initial_benchmark_passed?: boolean | null;
@@ -53,6 +69,8 @@ export type BenchmarkResult = {
   final_status?: string | null;
   expected_document_hit?: boolean | null;
   preferred_page_hit?: boolean | null;
+  figure_retrieval_hit?: boolean | null;
+  figure_count?: number | null;
   source_pages?: number[];
   retrieval_seconds?: number | null;
   generation_seconds?: number | null;
@@ -72,6 +90,8 @@ export type BenchmarkRun = {
   benchmark_file?: string | null;
   run_id: string;
   created_at?: string | null;
+  condition?: string | null;
+  mode?: "rag" | "ollama-direct" | null;
   model?: string | null;
   api_url?: string | null;
   question_count?: number | null;
@@ -84,6 +104,8 @@ export type BenchmarkRunListItem = Pick<
   BenchmarkRun,
   | "run_id"
   | "created_at"
+  | "condition"
+  | "mode"
   | "model"
   | "question_count"
   | "wall_clock_seconds"

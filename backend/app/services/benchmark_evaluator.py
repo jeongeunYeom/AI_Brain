@@ -33,6 +33,8 @@ _NEGATION_RE = re.compile(
 @dataclass
 class BenchmarkEvaluation:
     passed: bool
+    answer_passed: bool
+    hallucination_detected: bool
     behavior_passed: bool
     expected_document_hit: bool | None
     preferred_page_hit: bool | None
@@ -206,15 +208,23 @@ def evaluate_benchmark_answer(
     else:
         preferred_page_hit = None
 
-    passed = (
+    answer_passed = (
         behavior_passed
         and not required_failures
         and not forbidden_hits
+    )
+    passed = (
+        answer_passed
         and expected_document_hit is not False
+    )
+    hallucination_detected = bool(forbidden_hits) or (
+        expected_behavior == "refuse" and not behavior_passed
     )
 
     return BenchmarkEvaluation(
         passed=passed,
+        answer_passed=answer_passed,
+        hallucination_detected=hallucination_detected,
         behavior_passed=behavior_passed,
         expected_document_hit=expected_document_hit,
         preferred_page_hit=preferred_page_hit,

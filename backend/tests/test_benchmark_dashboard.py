@@ -47,6 +47,8 @@ def test_lists_runs_and_loads_latest(tmp_path):
     newer = {
         "run_id": "20260703T050508Z",
         "created_at": "2026-07-03T05:05:08+00:00",
+        "condition": "qwen3_rag",
+        "mode": "rag",
         "model": "qwen3:8b",
         "question_count": 16,
         "summary": {
@@ -78,6 +80,8 @@ def test_lists_runs_and_loads_latest(tmp_path):
         "20260703T050508Z",
         "20260701T010101Z",
     ]
+    assert runs[0]["condition"] == "qwen3_rag"
+    assert runs[0]["mode"] == "rag"
     assert (
         service.get_latest()["summary"][
             "final_benchmark_pass_rate"

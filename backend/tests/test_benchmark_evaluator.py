@@ -51,6 +51,8 @@ def test_correct_answer_passes():
         sources=SOURCES,
     )
     assert result.passed is True
+    assert result.answer_passed is True
+    assert result.hallucination_detected is False
     assert result.preferred_page_hit is True
     assert result.expected_document_hit is True
 
@@ -68,6 +70,8 @@ def test_affirmative_forbidden_claim_fails():
         sources=SOURCES,
     )
     assert result.passed is False
+    assert result.answer_passed is False
+    assert result.hallucination_detected is True
     assert result.forbidden_hits
 
 

@@ -115,6 +115,8 @@ class BenchmarkDashboardService:
         return {
             "run_id": run_id,
             "created_at": payload.get("created_at"),
+            "condition": payload.get("condition"),
+            "mode": payload.get("mode"),
             "model": payload.get("model"),
             "question_count": payload.get(
                 "question_count",
