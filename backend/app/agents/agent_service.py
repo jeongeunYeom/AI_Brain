@@ -29,6 +29,77 @@ from app.models.agent_schemas import (
 )
 
 
+_CONVERSATION_FILE_REFERENCE_TERMS = (
+    "아까",
+    "이전 결과",
+    "이전 파일",
+    "앞선 결과",
+    "앞의 결과",
+    "방금 결과",
+    "같은 파일",
+    "그 파일",
+    "해당 파일",
+    "그 결과",
+    "앞에서",
+    "previous result",
+    "previous file",
+    "last result",
+    "same file",
+)
+
+_CONVERSATION_FILE_OPERATION_TERMS = (
+    "분석",
+    "통계",
+    "그래프",
+    "차트",
+    "산점도",
+    "선 그래프",
+    "막대",
+    "히스토그램",
+    "비교",
+    "관계",
+    "상관",
+    "읽",
+    "요약",
+    "보고서",
+    "계산",
+    "plot",
+    "chart",
+    "analy",
+    "compare",
+    "read",
+)
+
+_CONVERSATION_CSV_OPERATION_TERMS = (
+    "csv",
+    "분석",
+    "통계",
+    "그래프",
+    "차트",
+    "산점도",
+    "선 그래프",
+    "막대",
+    "히스토그램",
+    "비교",
+    "관계",
+    "상관",
+    "plot",
+    "chart",
+    "correlation",
+)
+
+_CONVERSATION_MULTI_FILE_TERMS = (
+    "여러",
+    "모든",
+    "각 파일",
+    "파일들",
+    "결과들",
+    "비교",
+    "조건별",
+    "compare",
+)
+
+
 class AgentTaskNotFound(KeyError):
     pass
 
@@ -73,6 +144,11 @@ class AgentService:
                 conversation_id=conversation_id,
             )
 
+        request, context_source_task_id, context_files = (
+            self._apply_conversation_file_context(request, conversation_id)
+        )
+        validate_agent_plan_request(request)
+
         planned = self.planner.plan(request)
         for action in planned.actions:
             self.permissions.require_tool_level(request.permission_level, action.tool)
@@ -82,6 +158,8 @@ class AgentService:
         task = {
             "task_id": task_id,
             "conversation_id": conversation_id,
+            "context_source_task_id": context_source_task_id,
+            "context_files": context_files,
             "request": request.request,
             "status": AgentTaskStatus.PLANNED.value,
             "permission_level": int(request.permission_level),
@@ -282,6 +360,8 @@ class AgentService:
         task = {
             "task_id": task_id,
             "conversation_id": conversation_id,
+            "context_source_task_id": None,
+            "context_files": [],
             "request": request.request,
             "status": AgentTaskStatus.FAILED.value,
             "permission_level": int(request.permission_level),
@@ -322,6 +402,83 @@ class AgentService:
             self._read_conversation(conversation_id)
             return conversation_id
         return self.create_conversation(title=title).conversation_id
+
+    def _apply_conversation_file_context(
+        self,
+        request: AgentPlanRequest,
+        conversation_id: str,
+    ) -> tuple[AgentPlanRequest, str | None, list[str]]:
+        """Resolve explicit follow-up references against the latest usable task files."""
+
+        if request.target_path or request.target_paths:
+            return request, None, []
+
+        text = request.request.strip().lower()
+        refers_to_previous_file = any(
+            term in text for term in _CONVERSATION_FILE_REFERENCE_TERMS
+        )
+        requests_file_operation = any(
+            term in text for term in _CONVERSATION_FILE_OPERATION_TERMS
+        )
+        if not refers_to_previous_file or not requests_file_operation:
+            return request, None, []
+
+        csv_required = any(term in text for term in _CONVERSATION_CSV_OPERATION_TERMS)
+        multiple_requested = any(
+            term in text for term in _CONVERSATION_MULTI_FILE_TERMS
+        )
+        record = self._read_conversation(conversation_id)
+        for previous_task in reversed(self._conversation_tasks(record)):
+            if previous_task.status != AgentTaskStatus.COMPLETED:
+                continue
+            candidates = self._usable_context_files(
+                [*previous_task.created_files, *previous_task.read_files],
+                csv_required=csv_required,
+            )
+            if not candidates:
+                continue
+
+            selected = candidates[:10] if multiple_requested else candidates[:1]
+            updates: dict[str, object] = {"target_path": selected[0]}
+            if multiple_requested and len(selected) > 1:
+                updates["target_paths"] = selected
+            return (
+                request.model_copy(update=updates),
+                previous_task.task_id,
+                selected,
+            )
+
+        kind = "CSV 파일" if csv_required else "파일"
+        raise ValueError(
+            f"이 대화의 이전 완료 작업에서 다시 사용할 {kind}을 찾지 못했습니다. "
+            "대상 파일을 직접 선택해 주세요."
+        )
+
+    def _usable_context_files(
+        self,
+        paths: list[str],
+        *,
+        csv_required: bool,
+    ) -> list[str]:
+        usable: list[str] = []
+        for value in paths:
+            if value in usable:
+                continue
+            if csv_required and Path(value).suffix.lower() != ".csv":
+                continue
+            try:
+                resolved = self.permissions.resolve_path(
+                    value,
+                    must_exist=True,
+                    allow_directory=False,
+                    allowed_extensions={".csv"} if csv_required else None,
+                )
+            except (AgentPermissionError, AgentSecurityError, FileNotFoundError):
+                continue
+            relative = self.permissions.to_relative(resolved)
+            if relative and relative not in usable:
+                usable.append(relative)
+        return usable
 
     def _append_task_to_conversation(self, conversation_id: str, task_id: str) -> None:
         with self._lock:

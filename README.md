@@ -91,6 +91,8 @@ results/mrst_co2_analysis.md   # 통계·상관·열 매핑·가정 보고서
 - 하나의 Agent 대화에 여러 작업 누적
 - 새 대화 생성, 과거 대화 목록 및 대화 전체 복원
 - 대화별 작업 기록 연결
+- 같은 대화에서 `아까 결과`, `같은 파일`처럼 요청하면 이전 완료 작업의 파일 자동 참조
+- 자동 참조한 원본 작업 ID와 파일 경로를 계획 화면에 표시
 - 최근 Agent 작업 50개를 최신순으로 표시
 - `completed`, `failed`, `canceled` 상태 확인
 - 요청 내용, 생성 시각과 실행 시간 표시
@@ -102,6 +104,7 @@ results/mrst_co2_analysis.md   # 통계·상관·열 매핑·가정 보고서
 
 ```text
 data/agent_runs/<task-id>.json
+data/agent_conversations/<conversation-id>.json
 ```
 
 ### 5. 안전장치

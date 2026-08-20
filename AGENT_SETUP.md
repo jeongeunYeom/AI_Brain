@@ -9,6 +9,8 @@
 - 수정 전 `data/agent_backups/<task-id>/` 자동 백업
 - 제한된 Python 데이터 분석 실행
 - 계획, 도구, 파일, 코드, 결과, 오류를 `data/agent_runs/<task-id>.json`에 기록
+- 하나의 대화에 여러 작업을 누적하고 `data/agent_conversations/<conversation-id>.json`에 연결 정보 저장
+- `아까 결과`, `같은 파일` 같은 후속 요청에서 이전 완료 작업의 파일을 안전하게 자동 참조
 
 기존 RAG API와 화면은 유지되며 `/agent` 화면에서 Agent 모드로 전환할 수 있습니다.
 
@@ -25,6 +27,9 @@ AGENT_MAX_FILE_BYTES=5242880
 ## API
 
 - `POST /api/agent/plan`
+- `POST /api/agent/conversations`
+- `GET /api/agent/conversations`
+- `GET /api/agent/conversations/{conversation_id}`
 - `POST /api/agent/tasks/{task_id}/execute`
 - `GET /api/agent/tasks/{task_id}`
 - `POST /api/agent/tasks/{task_id}/cancel`
@@ -35,3 +40,5 @@ AGENT_MAX_FILE_BYTES=5242880
 Python은 별도 프로세스로 실행되며 실행 시간, 코드 길이와 출력 길이를 제한합니다. 사용자 코드의 import는 데이터 분석용 허용 목록으로 제한하고, 네트워크 소켓과 작업공간 밖의 파일 열기를 런타임에서도 차단합니다. 이 방식은 운영체제 수준 컨테이너 격리는 아니므로 신뢰할 수 없는 다중 사용자 서버에 공개하기 전에는 컨테이너 또는 별도 OS 사용자 격리를 추가해야 합니다.
 
 1차 버전에서는 파일 삭제, 이동, 임의 셸 명령, 관리자 권한, 패키지 설치, 인터넷 검색, Git 자동 작업을 제공하지 않습니다.
+
+이전 파일 자동 참조는 같은 대화의 **완료된 작업 기록**만 사용합니다. 사용자가 대상 파일을 직접 지정하면 그 경로가 항상 우선하며, 참조 파일이 없거나 삭제된 경우에는 임의로 추측하지 않고 파일 선택을 요청합니다.

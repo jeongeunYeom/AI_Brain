@@ -477,6 +477,19 @@ export default function AgentPage() {
                   <div className="rounded-2xl bg-slate-900 p-4 text-xs text-slate-200">
                     <p className="font-bold text-white">{task.task_id}</p>
                     <p className="mt-1 break-all text-slate-400">workspace: {task.workspace}</p>
+                    {task.context_files.length > 0 && (
+                      <div className="mt-3 rounded-xl border border-indigo-400/30 bg-indigo-400/10 p-3 text-indigo-100">
+                        <p className="font-bold">↳ 이전 작업 파일 자동 참조</p>
+                        {task.context_source_task_id && (
+                          <p className="mt-1 font-mono text-[10px] text-indigo-300">
+                            {task.context_source_task_id}
+                          </p>
+                        )}
+                        <p className="mt-1 break-all text-[11px] text-indigo-200">
+                          {task.context_files.join(", ")}
+                        </p>
+                      </div>
+                    )}
                     {task.status === "running" && (
                       <div className="mt-4">
                         <div className="flex items-center justify-between gap-3 text-[11px]">

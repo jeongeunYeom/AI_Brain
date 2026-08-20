@@ -79,6 +79,8 @@ class AgentExecuteRequest(BaseModel):
 class AgentTaskResponse(BaseModel):
     task_id: str
     conversation_id: str | None = None
+    context_source_task_id: str | None = None
+    context_files: list[str] = Field(default_factory=list)
     request: str
     status: AgentTaskStatus
     permission_level: AgentPermissionLevel
