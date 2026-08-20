@@ -1,4 +1,4 @@
-# AI_Brain Agent Workspace
+# Petroleum RAG Agent Workspace
 
 Agent가 읽고 생성하고 수정할 연구 파일을 이 폴더 안에 넣으세요.
 

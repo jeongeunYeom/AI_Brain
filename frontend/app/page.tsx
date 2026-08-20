@@ -525,7 +525,7 @@ export default function Home() {
         <div className="flex h-14 items-center gap-3 border-b border-slate-200 px-4">
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-600 text-sm font-bold text-white">A</div>
           <div className="min-w-0">
-            <h1 className="truncate text-sm font-bold">AI_Brain</h1>
+            <h1 className="truncate text-sm font-bold">Petroleum RAG Agent</h1>
             <p className="truncate text-[11px] text-slate-500">Petroleum RAG Agent</p>
           </div>
         </div>
@@ -693,7 +693,7 @@ export default function Home() {
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 md:px-6">
           <div className="flex items-center gap-3">
             <div>
-              <h2 className="text-sm font-bold">AI_Brain 7.0 ▾</h2>
+              <h2 className="text-sm font-bold">Petroleum RAG Agent 7.0 ▾</h2>
               <p className="hidden text-xs text-slate-500 sm:block">Citation-grounded Q&A with local knowledge base</p>
             </div>
           </div>
@@ -737,7 +737,7 @@ export default function Home() {
                 </div>
                 <div className="max-w-[86%] rounded-3xl rounded-tl-md bg-white px-5 py-4 text-sm leading-7 text-slate-700 shadow-sm ring-1 ring-slate-200">
                   <p className="font-semibold text-slate-900">
-                    AI_Brain이 준비됐어.
+                    Petroleum RAG Agent가 준비됐어.
                   </p>
                   <p className="mt-2">
                     왼쪽에서 PDF/TXT/PPT 자료를 업로드한 뒤, 아래 입력창에 질문하면 검색된 문서 근거를 바탕으로 답변해.
@@ -973,7 +973,7 @@ export default function Home() {
             <span className="pb-2 text-slate-400">＋</span>
             <textarea
               className="max-h-40 min-h-[36px] flex-1 resize-none bg-transparent py-2 text-sm outline-none placeholder:text-slate-400"
-              placeholder="Message AI_Brain..."
+              placeholder="Message Petroleum RAG Agent..."
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
               onKeyDown={(event) => {
@@ -991,7 +991,7 @@ export default function Home() {
               ↑
             </button>
           </div>
-          <p className="mt-2 text-center text-[11px] text-slate-400">AI_Brain can make mistakes. Check retrieved sources and page numbers.</p>
+          <p className="mt-2 text-center text-[11px] text-slate-400">Petroleum RAG Agent can make mistakes. Check retrieved sources and page numbers.</p>
         </form>
       </section>
 

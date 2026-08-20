@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENV_FILE = PROJECT_ROOT / ".env"
 
-# Load local environment variables from D:\AI_Brain\.env when present.
+# Load local environment variables from the project .env when present.
 load_dotenv(ENV_FILE)
 
 

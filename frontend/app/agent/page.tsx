@@ -361,7 +361,7 @@ export default function AgentPage() {
               </button>
               <div>
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-600">
-                AI_Brain Research Agent
+                Petroleum RAG Agent
               </p>
               <h1 className="mt-1 text-xl font-black sm:text-2xl">석유공학 작업 Agent</h1>
               <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500 sm:text-sm">
@@ -936,7 +936,7 @@ function AgentMobileDrawer({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-sm font-black text-white">AI</span>
-            <div><p className="font-black">AI_Brain</p><p className="text-xs text-slate-400">Research workspace</p></div>
+            <div><p className="font-black">Petroleum RAG Agent</p><p className="text-xs text-slate-400">Research workspace</p></div>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold">닫기</button>
         </div>

@@ -205,7 +205,7 @@ class PythonTools:
 
     def _guard_prelude(self) -> str:
         workspace = repr(str(self.permissions.workspace))
-        return f'''# AI_Brain Agent sandbox guard
+        return f'''# Petroleum RAG Agent sandbox guard
 import builtins as _agent_builtins
 import socket as _agent_socket
 import sys as _agent_sys

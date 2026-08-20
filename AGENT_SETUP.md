@@ -1,4 +1,4 @@
-# AI_Brain Research Agent v1
+# Petroleum RAG Agent Research Agent v1
 
 ## 제공 기능
 

@@ -1,8 +1,8 @@
-# AI_Brain · Petroleum Engineering Research Agent
+# petroleum-rag-agent · Petroleum Engineering RAG Agent
 
 석유공학 문서에 근거해 답변하는 RAG와 연구 파일을 직접 분석하는 Agent를 결합한 로컬 우선 웹 애플리케이션입니다.
 
-AI_Brain의 목표는 단순한 질의응답을 넘어 PDF와 연구 데이터를 검색·분석하고, 보고서와 그래프를 안전하게 생성하는 **실행형 석유공학 연구지원 AI**를 만드는 것입니다.
+petroleum-rag-agent의 목표는 단순한 질의응답을 넘어 PDF와 연구 데이터를 검색·분석하고, 보고서와 그래프를 안전하게 생성하는 **실행형 석유공학 연구지원 AI**를 만드는 것입니다.
 
 ## 핵심 목표
 
@@ -145,7 +145,7 @@ data/agent_conversations/<conversation-id>.json
 ## 프로젝트 구조
 
 ```text
-AI_Brain/
+petroleum-rag-agent/
 ├─ backend/
 │  ├─ app/agents/          # Agent 계획·권한·실행
 │  ├─ app/api/             # RAG, Agent, Figure API
@@ -372,4 +372,4 @@ delta는 첫 번째 조건을 기준으로 한 기술 통계이며 통계적 유
 
 ## 한 줄 요약
 
-> AI_Brain은 석유공학 자료에 답변하는 RAG 시스템에서 출발해, 연구 데이터를 분석하고 보고서와 그래프를 안전하게 생성하는 실행형 석유공학 AI Agent로 발전하고 있습니다.
+> petroleum-rag-agent는 석유공학 자료에 답변하는 RAG 시스템에서 출발해, 연구 데이터를 분석하고 보고서와 그래프를 안전하게 생성하는 실행형 석유공학 AI Agent로 발전하고 있습니다.
