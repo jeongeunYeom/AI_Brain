@@ -256,6 +256,12 @@ cd backend
 pytest -q tests/test_agent_api.py tests/test_agent_tools.py
 ```
 
+MRST/CO₂ Agent 실제 API E2E(별도 Ollama 불필요):
+
+```bash
+python scripts/e2e/run_agent_mrst_e2e.py
+```
+
 프론트엔드 production build:
 
 ```bash

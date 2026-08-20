@@ -28,3 +28,18 @@ This script starts the backend with `uvicorn app.main:app --reload`, verifies `/
 ## Ollama-down / missing-model error check
 
 To verify the friendly 503 error path, run a second backend instance with `OLLAMA_BASE_URL` pointing to an unused port and set `E2E_BAD_OLLAMA_API` to that instance before running the Docker-based script. The script will assert the error payload contains a user-facing Korean message under `detail.message`.
+
+## MRST/CO₂ Agent E2E
+
+```bash
+python scripts/e2e/run_agent_mrst_e2e.py
+```
+
+This test does not require Ollama or Docker. It starts FastAPI with temporary
+data/workspace directories and validates the complete approval-based Agent flow:
+
+1. create a representative Johansen `srco2` CSV through the Agent API;
+2. plan and approve the MRST/CO₂ analysis;
+3. validate the summary CSV, PNG chart, Markdown report, previews, and downloads;
+4. confirm that the input CSV was read but not modified;
+5. restart FastAPI and restore the conversation, tasks, validation results, and outputs.

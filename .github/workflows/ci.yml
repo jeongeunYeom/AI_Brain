@@ -40,6 +40,8 @@ jobs:
           name: agent-regression-log
           path: backend/agent-regression.log
           if-no-files-found: ignore
+      - name: Run MRST CO2 Agent E2E
+        run: python ../scripts/e2e/run_agent_mrst_e2e.py
       - name: Run full backend suite (informational)
         id: full-suite
         continue-on-error: true
