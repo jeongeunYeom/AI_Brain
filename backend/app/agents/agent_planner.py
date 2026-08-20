@@ -274,6 +274,38 @@ class AgentPlanner:
                 ],
             )
 
+        if self._looks_like_figure_search(lowered):
+            return PlannedTask(
+                plan=[
+                    "질문에서 찾을 Figure 주제와 핵심 용어를 확인합니다.",
+                    "Figure Note와 관련 문서 근거를 읽기 전용으로 검색합니다.",
+                    "관련 Figure 원본 경로와 문서·페이지 정보를 반환합니다.",
+                ],
+                actions=[
+                    self._action(
+                        AgentToolName.GET_RELATED_FIGURES,
+                        "관련 Figure와 문서 근거 검색",
+                        {"query": text, "top_k": 5},
+                    )
+                ],
+            )
+
+        if self._looks_like_knowledge_search(lowered):
+            return PlannedTask(
+                plan=[
+                    "질문에서 문헌 검색에 사용할 핵심 용어를 확인합니다.",
+                    "Text/Figure RAG 지식베이스를 읽기 전용으로 검색합니다.",
+                    "검색된 문서·페이지·근거 문장을 반환합니다.",
+                ],
+                actions=[
+                    self._action(
+                        AgentToolName.SEARCH_KNOWLEDGE_BASE,
+                        "관련 문헌과 근거 검색",
+                        {"query": text, "top_k": 5},
+                    )
+                ],
+            )
+
         if target and self._looks_like_read(lowered):
             return PlannedTask(
                 plan=[
@@ -514,6 +546,45 @@ class AgentPlanner:
         return "csv" in text and any(
             word in text for word in ("산점도", "scatter", "그래프", "plot")
         )
+
+    @staticmethod
+    def _looks_like_figure_search(text: str) -> bool:
+        figure_terms = (
+            "figure",
+            "그래프",
+            "도표",
+            "그림",
+            "plot",
+            "chart",
+        )
+        search_terms = (
+            "찾",
+            "검색",
+            "관련",
+            "근거",
+            "문헌",
+            "논문",
+            "search",
+        )
+        return any(term in text for term in figure_terms) and any(
+            term in text for term in search_terms
+        )
+
+    @staticmethod
+    def _looks_like_knowledge_search(text: str) -> bool:
+        knowledge_terms = (
+            "문헌",
+            "논문",
+            "이론",
+            "지식베이스",
+            "rag",
+            "문서 근거",
+            "출처",
+            "교재",
+            "literature",
+            "knowledge base",
+        )
+        return any(term in text for term in knowledge_terms)
 
     def _action(
         self,

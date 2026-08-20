@@ -378,6 +378,37 @@ def test_safe_directory_request_still_uses_list_directory(client: TestClient) ->
     assert task["required_tools"] == ["list_directory"]
 
 
+def test_knowledge_search_plan_is_read_only(client: TestClient) -> None:
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "pressure buildup 관련 문헌과 이론을 찾아줘.",
+            "permission_level": 1,
+        },
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    assert task["required_tools"] == ["search_knowledge_base"]
+    assert task["requires_approval"] is False
+    assert task["actions"][0]["arguments"]["top_k"] == 5
+
+
+def test_related_figure_search_plan_is_read_only(client: TestClient) -> None:
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "wellbore storage 관련 Figure를 찾아줘.",
+            "permission_level": 1,
+        },
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    assert task["required_tools"] == ["get_related_figures"]
+    assert task["requires_approval"] is False
+
+
 def test_read_only_csv_plan_and_execute(
     client: TestClient,
     agent_settings: Settings,

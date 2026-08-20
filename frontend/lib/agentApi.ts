@@ -11,6 +11,8 @@ export type AgentTaskStatus =
 export type AgentToolName =
   | "list_directory"
   | "read_file"
+  | "search_knowledge_base"
+  | "get_related_figures"
   | "create_file"
   | "edit_file"
   | "run_python";
