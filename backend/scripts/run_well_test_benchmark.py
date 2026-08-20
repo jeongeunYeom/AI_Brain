@@ -153,6 +153,55 @@ def ratio(numerator: int, denominator: int) -> float | None:
     return numerator / denominator
 
 
+def completed_rows(
+    results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        row for row in results
+        if row.get("infrastructure_error") is None
+    ]
+
+
+def rows_with_value(
+    rows: list[dict[str, Any]],
+    key: str,
+) -> list[dict[str, Any]]:
+    return [
+        row for row in rows
+        if row.get(key) is not None
+    ]
+
+
+def count_true(
+    rows: list[dict[str, Any]],
+    key: str,
+) -> int:
+    return sum(1 for row in rows if row.get(key) is True)
+
+
+def count_false(
+    rows: list[dict[str, Any]],
+    key: str,
+) -> int:
+    return sum(1 for row in rows if row.get(key) is False)
+
+
+def mean_field(
+    rows: list[dict[str, Any]],
+    key: str,
+) -> float | None:
+    values: list[float] = []
+    for row in rows:
+        value = row.get(key)
+        if value is None:
+            continue
+        try:
+            values.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return safe_mean(values)
+
+
 def category_summary(
     results: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -165,16 +214,8 @@ def category_summary(
 
     summary: dict[str, Any] = {}
     for category, rows in sorted(grouped.items()):
-        answer_passes = sum(
-            1
-            for row in rows
-            if row.get("final_answer_passed") is True
-        )
-        final_passes = sum(
-            1
-            for row in rows
-            if row.get("final_benchmark_passed") is True
-        )
+        answer_passes = count_true(rows, "final_answer_passed")
+        final_passes = count_true(rows, "final_benchmark_passed")
         summary[category] = {
             "total": len(rows),
             "answer_passed": answer_passes,
@@ -191,54 +232,14 @@ def category_summary(
 def build_summary(
     results: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    completed = [
-        row for row in results
-        if row.get("infrastructure_error") is None
-    ]
-    initial_benchmark_passes = sum(
-        1
-        for row in completed
-        if row.get("initial_benchmark_passed") is True
+    completed = completed_rows(results)
+    initial_validator_rows = rows_with_value(
+        completed,
+        "initial_validator_passed",
     )
-    final_benchmark_passes = sum(
-        1
-        for row in completed
-        if row.get("final_benchmark_passed") is True
-    )
-    initial_validator_rows = [
-        row
-        for row in completed
-        if row.get("initial_validator_passed") is not None
-    ]
-    final_validator_rows = [
-        row
-        for row in completed
-        if row.get("final_validator_passed") is not None
-    ]
-    initial_validator_passes = sum(
-        1
-        for row in initial_validator_rows
-        if row.get("initial_validator_passed") is True
-    )
-    final_validator_passes = sum(
-        1
-        for row in final_validator_rows
-        if row.get("final_validator_passed") is True
-    )
-    initial_answer_passes = sum(
-        1
-        for row in completed
-        if row.get("initial_answer_passed") is True
-    )
-    final_answer_passes = sum(
-        1
-        for row in completed
-        if row.get("final_answer_passed") is True
-    )
-    hallucinations = sum(
-        1
-        for row in completed
-        if row.get("hallucination_detected") is True
+    final_validator_rows = rows_with_value(
+        completed,
+        "final_validator_passed",
     )
 
     initial_benchmark_failures = [
@@ -246,20 +247,9 @@ def build_summary(
         for row in completed
         if row.get("initial_benchmark_passed") is False
     ]
-    rewrite_successes = sum(
-        1
-        for row in initial_benchmark_failures
-        if row.get("final_benchmark_passed") is True
-    )
-    validator_detection_rows = [
-        row
-        for row in initial_benchmark_failures
-        if row.get("initial_validator_passed") is not None
-    ]
-    validator_detections = sum(
-        1
-        for row in validator_detection_rows
-        if row.get("initial_validator_passed") is False
+    validator_detection_rows = rows_with_value(
+        initial_benchmark_failures,
+        "initial_validator_passed",
     )
 
     initially_correct = [
@@ -267,15 +257,9 @@ def build_summary(
         for row in completed
         if row.get("initial_benchmark_passed") is True
     ]
-    validator_false_positive_rows = [
-        row
-        for row in initially_correct
-        if row.get("initial_validator_passed") is not None
-    ]
-    validator_false_positives = sum(
-        1
-        for row in validator_false_positive_rows
-        if row.get("initial_validator_passed") is False
+    validator_false_positive_rows = rows_with_value(
+        initially_correct,
+        "initial_validator_passed",
     )
 
     refusal_rows = [
@@ -289,41 +273,29 @@ def build_summary(
         if row.get("final_answer") == STRICT_REFUSAL
     )
 
-    page_rows = [
-        row
-        for row in completed
-        if row.get("preferred_page_hit") is not None
-    ]
-    page_hits = sum(
-        1
-        for row in page_rows
-        if row.get("preferred_page_hit") is True
+    page_rows = rows_with_value(
+        completed,
+        "preferred_page_hit",
     )
-
-    document_rows = [
-        row
-        for row in completed
-        if row.get("expected_document_hit") is not None
-    ]
-    document_hits = sum(
-        1
-        for row in document_rows
-        if row.get("expected_document_hit") is True
+    document_rows = rows_with_value(
+        completed,
+        "expected_document_hit",
+    )
+    page_recall = ratio(
+        count_true(page_rows, "preferred_page_hit"),
+        len(page_rows),
+    )
+    document_recall = ratio(
+        count_true(document_rows, "expected_document_hit"),
+        len(document_rows),
     )
 
     figure_rows = [
         row for row in completed if row.get("question_type") == "figure"
     ]
-    figure_answer_passes = sum(
-        1 for row in figure_rows if row.get("final_answer_passed") is True
-    )
-    figure_retrieval_rows = [
-        row for row in figure_rows if row.get("figure_retrieval_hit") is not None
-    ]
-    figure_retrieval_hits = sum(
-        1
-        for row in figure_retrieval_rows
-        if row.get("figure_retrieval_hit") is True
+    figure_retrieval_rows = rows_with_value(
+        figure_rows,
+        "figure_retrieval_hit",
     )
 
     return {
@@ -333,91 +305,80 @@ def build_summary(
             len(results) - len(completed)
         ),
         "initial_answer_accuracy": ratio(
-            initial_answer_passes,
+            count_true(completed, "initial_answer_passed"),
             len(completed),
         ),
-        "answer_accuracy": ratio(final_answer_passes, len(completed)),
-        "hallucination_rate": ratio(hallucinations, len(completed)),
+        "answer_accuracy": ratio(
+            count_true(completed, "final_answer_passed"),
+            len(completed),
+        ),
+        "hallucination_rate": ratio(
+            count_true(completed, "hallucination_detected"),
+            len(completed),
+        ),
         "initial_benchmark_pass_rate": ratio(
-            initial_benchmark_passes,
+            count_true(completed, "initial_benchmark_passed"),
             len(completed),
         ),
         "final_benchmark_pass_rate": ratio(
-            final_benchmark_passes,
+            count_true(completed, "final_benchmark_passed"),
             len(completed),
         ),
         "initial_validator_pass_rate": ratio(
-            initial_validator_passes,
+            count_true(initial_validator_rows, "initial_validator_passed"),
             len(initial_validator_rows),
         ),
         "final_validator_pass_rate": ratio(
-            final_validator_passes,
+            count_true(final_validator_rows, "final_validator_passed"),
             len(final_validator_rows),
         ),
         "rewrite_success_rate": ratio(
-            rewrite_successes,
+            count_true(
+                initial_benchmark_failures,
+                "final_benchmark_passed",
+            ),
             len(initial_benchmark_failures),
         ),
         "validator_detection_rate": ratio(
-            validator_detections,
+            count_false(
+                validator_detection_rows,
+                "initial_validator_passed",
+            ),
             len(validator_detection_rows),
         ),
         "validator_false_positive_rate": ratio(
-            validator_false_positives,
+            count_false(
+                validator_false_positive_rows,
+                "initial_validator_passed",
+            ),
             len(validator_false_positive_rows),
         ),
         "exact_refusal_rate": ratio(
             exact_refusals,
             len(refusal_rows),
         ),
-        "preferred_page_hit_rate": ratio(
-            page_hits,
-            len(page_rows),
-        ),
-        "expected_document_hit_rate": ratio(
-            document_hits,
-            len(document_rows),
-        ),
-        "retrieval_document_recall_at_k": ratio(
-            document_hits,
-            len(document_rows),
-        ),
-        "retrieval_page_recall_at_k": ratio(
-            page_hits,
-            len(page_rows),
-        ),
+        "preferred_page_hit_rate": page_recall,
+        "expected_document_hit_rate": document_recall,
+        "retrieval_document_recall_at_k": document_recall,
+        "retrieval_page_recall_at_k": page_recall,
         "figure_answer_accuracy": ratio(
-            figure_answer_passes,
+            count_true(figure_rows, "final_answer_passed"),
             len(figure_rows),
         ),
         "figure_retrieval_accuracy": ratio(
-            figure_retrieval_hits,
+            count_true(figure_retrieval_rows, "figure_retrieval_hit"),
             len(figure_retrieval_rows),
         ),
-        "average_attempts": safe_mean(
-            [
-                float(row["attempts"])
-                for row in completed
-            ]
+        "average_attempts": mean_field(completed, "attempts"),
+        "average_retrieval_seconds": mean_field(
+            completed,
+            "retrieval_seconds",
         ),
-        "average_retrieval_seconds": safe_mean(
-            [
-                float(row["retrieval_seconds"])
-                for row in completed
-            ]
+        "average_generation_seconds": mean_field(
+            completed,
+            "generation_seconds",
         ),
-        "average_generation_seconds": safe_mean(
-            [
-                float(row["generation_seconds"])
-                for row in completed
-            ]
-        ),
-        "average_total_seconds": safe_mean(
-            [
-                float(row["total_seconds"])
-                for row in completed
-            ]
-        ),
+        "average_total_seconds": mean_field(completed, "total_seconds"),
         "category_metrics": category_summary(completed),
     }
 

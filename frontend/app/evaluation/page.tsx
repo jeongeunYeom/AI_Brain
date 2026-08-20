@@ -2,10 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AppIconRail } from "@/components/AppNavigation";
-import {
+import type {
   BenchmarkResult,
   BenchmarkRun,
   BenchmarkRunListItem,
+  BenchmarkSummary,
+} from "@/lib/evaluationApi";
+import {
   getBenchmarkRun,
   getBenchmarkRuns,
   getLatestBenchmarkRun,
@@ -21,6 +24,25 @@ function percentage(value?: number | null): string {
 function seconds(value?: number | null): string {
   if (value === null || value === undefined) return "—";
   return `${value.toFixed(2)}s`;
+}
+
+function firstNumber(
+  ...values: Array<number | null | undefined>
+): number | null | undefined {
+  return values.find(
+    (value) => value !== null && value !== undefined,
+  );
+}
+
+function summaryRate(
+  summary: BenchmarkSummary,
+  ...keys: Array<keyof BenchmarkSummary>
+): number | null | undefined {
+  for (const key of keys) {
+    const value = summary[key];
+    if (typeof value === "number") return value;
+  }
+  return undefined;
 }
 
 function answerPassed(
@@ -262,6 +284,26 @@ export default function EvaluationDashboardPage() {
   }, [filteredResults, run, selectedResultId]);
 
   const summary = run?.summary ?? {};
+  const answerAccuracy = summaryRate(
+    summary,
+    "answer_accuracy",
+    "final_benchmark_pass_rate",
+  );
+  const initialAccuracy = summaryRate(
+    summary,
+    "initial_answer_accuracy",
+    "initial_benchmark_pass_rate",
+  );
+  const pageHitRate = summaryRate(
+    summary,
+    "retrieval_page_recall_at_k",
+    "preferred_page_hit_rate",
+  );
+  const documentHitRate = summaryRate(
+    summary,
+    "retrieval_document_recall_at_k",
+    "expected_document_hit_rate",
+  );
   const categoryMetrics = Object.entries(
     summary.category_metrics ?? {},
   ).sort(([left], [right]) => left.localeCompare(right));
@@ -352,7 +394,11 @@ export default function EvaluationDashboardPage() {
                   <option key={item.run_id} value={item.run_id}>
                     {item.run_id} · {item.condition ?? item.model ?? "unknown"} ·{" "}
                     {percentage(
-                      item.summary.answer_accuracy ?? item.summary.final_benchmark_pass_rate,
+                      summaryRate(
+                        item.summary,
+                        "answer_accuracy",
+                        "final_benchmark_pass_rate",
+                      ),
                     )}
                   </option>
                 ))}
@@ -364,7 +410,7 @@ export default function EvaluationDashboardPage() {
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <MetricCard
             label="Answer accuracy"
-            value={percentage(summary.answer_accuracy)}
+            value={percentage(answerAccuracy)}
             description={`${summary.questions_completed ?? 0}/${
               summary.questions_total ?? 0
             } completed`}
@@ -372,10 +418,7 @@ export default function EvaluationDashboardPage() {
           />
           <MetricCard
             label="Initial pass"
-            value={percentage(
-              summary.initial_answer_accuracy ??
-                summary.initial_benchmark_pass_rate,
-            )}
+            value={percentage(initialAccuracy)}
             description="첫 답변 기준"
           />
           <MetricCard
@@ -398,7 +441,7 @@ export default function EvaluationDashboardPage() {
           />
           <MetricCard
             label="Page hit"
-            value={percentage(summary.preferred_page_hit_rate)}
+            value={percentage(pageHitRate)}
             description="권장 페이지 검색"
           />
           <MetricCard
@@ -414,7 +457,7 @@ export default function EvaluationDashboardPage() {
             <div className="mt-5 space-y-5">
               <RateBar
                 label="답변 정확도"
-                value={summary.answer_accuracy}
+                value={answerAccuracy}
                 caption="내용·거절 행동 기준"
               />
               <RateBar
@@ -453,7 +496,7 @@ export default function EvaluationDashboardPage() {
               />
               <RateBar
                 label="예상 문서 적중률"
-                value={summary.retrieval_document_recall_at_k ?? summary.expected_document_hit_rate}
+                value={documentHitRate}
                 caption="정답 문서가 검색 근거에 포함"
               />
               <RateBar
@@ -523,7 +566,10 @@ export default function EvaluationDashboardPage() {
                 <div className="mt-2 flex items-end justify-between">
                   <span className="text-2xl font-black">
                     {percentage(
-                      metric.answer_accuracy ?? metric.final_pass_rate,
+                      firstNumber(
+                        metric.answer_accuracy,
+                        metric.final_pass_rate,
+                      ),
                     )}
                   </span>
                   <span className="text-xs text-slate-400">
