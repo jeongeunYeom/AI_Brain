@@ -537,6 +537,30 @@ export default function AgentPage() {
                     <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm">
                       <h3 className="font-black">작업 결과</h3>
                       {task.error && <p className="text-red-700">오류: {task.error}</p>}
+                      {task.validation_records.length > 0 && (
+                        <div
+                          className={`rounded-xl border p-3 ${
+                            task.validation_passed
+                              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                              : "border-red-200 bg-red-50 text-red-800"
+                          }`}
+                        >
+                          <p className="text-xs font-black">
+                            {task.validation_passed
+                              ? "✓ 결과 자동 검증 통과"
+                              : "✕ 결과 자동 검증 실패"}
+                          </p>
+                          <ul className="mt-2 space-y-1 text-[11px]">
+                            {task.validation_records.flatMap((record) =>
+                              record.checks.map((check) => (
+                                <li key={`${record.action_id}:${check.name}:${check.path ?? check.detail}`}>
+                                  {check.passed ? "✓" : "✕"} {check.detail}
+                                </li>
+                              )),
+                            )}
+                          </ul>
+                        </div>
+                      )}
                       <ResultList title="읽은 파일" values={task.read_files} />
                       <ResultFiles title="생성된 파일" values={task.created_files} onPreview={openPreview} previewLoading={previewLoading} />
                       <ResultList title="수정된 파일" values={task.modified_files} />

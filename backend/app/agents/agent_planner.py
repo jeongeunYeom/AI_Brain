@@ -182,6 +182,7 @@ class AgentPlanner:
                             "code": code,
                             "x_column": x_name,
                             "y_column": y_name,
+                            "expected_outputs": [output_path],
                         },
                         target_files=[csv_path, output_path],
                         requires_approval=True,
@@ -206,7 +207,7 @@ class AgentPlanner:
                     f"{csv_path}의 열 구조와 데이터 개수를 확인합니다.",
                     "숫자 열의 개수, 결측값, 최소·최대·평균을 계산합니다.",
                     "승인 후 분석 코드를 실행합니다.",
-                    f"분석 보고서를 {output_path}에 저장합니다.",
+                    f"분석 보고서를 {output_path}에 저장하고 내용을 검증합니다.",
                 ],
                 actions=[
                     self._action(
@@ -218,7 +219,10 @@ class AgentPlanner:
                     self._action(
                         AgentToolName.RUN_PYTHON,
                         "CSV 통계 보고서 생성",
-                        {"code": code},
+                        {
+                            "code": code,
+                            "expected_outputs": [output_path],
+                        },
                         target_files=[csv_path, output_path],
                         requires_approval=True,
                         preview=code,
@@ -243,6 +247,7 @@ class AgentPlanner:
                     f"생성할 파일 경로 {output_path}가 작업공간 내부인지 확인합니다.",
                     "동일한 파일이 이미 있는지 확인합니다.",
                     "승인 후 새 파일을 생성합니다. 기존 파일은 덮어쓰지 않습니다.",
+                    "생성된 파일의 존재 여부와 내용을 검증합니다.",
                 ],
                 actions=[
                     self._action(

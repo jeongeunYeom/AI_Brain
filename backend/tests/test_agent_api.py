@@ -572,6 +572,12 @@ def test_scatter_executes_with_selected_columns(
     result = wait_for_task(client, task["task_id"])
 
     assert result["status"] == "completed", result.get("error")
+    assert result["validation_passed"] is True
+    assert any(
+        check["name"] == "png_integrity" and check["passed"]
+        for record in result["validation_records"]
+        for check in record["checks"]
+    )
     assert "results/trapped_vs_free.png" in result["created_files"]
     output = agent_settings.agent_workspace_dir / "results/trapped_vs_free.png"
     assert output.is_file()
@@ -614,9 +620,19 @@ def test_report_requires_approval_and_creates_file(
     assert executed.status_code == 200
     result = wait_for_task(client, task["task_id"])
     assert result["status"] == "completed"
+    assert result["validation_passed"] is True
+    assert any(
+        check["name"] == "text_content" and check["passed"]
+        for record in result["validation_records"]
+        for check in record["checks"]
+    )
     assert "results/report.txt" in result["created_files"]
     assert (agent_settings.agent_workspace_dir / "results/report.txt").is_file()
     assert (agent_settings.agent_runs_dir / f"{task['task_id']}.json").is_file()
+
+    restored = AgentService(agent_settings).get_task(task["task_id"])
+    assert restored.validation_passed is True
+    assert restored.validation_records
 
 
 def test_edit_creates_backup_after_approval(
@@ -669,3 +685,33 @@ def test_dangerous_python_import_is_rejected(client: TestClient) -> None:
     )
     assert response.status_code == 400
     assert "Blocked Python import" in response.json()["detail"]
+
+
+def test_python_error_fails_result_validation(client: TestClient) -> None:
+    planned = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "오류가 발생하는 Python 코드를 실행해줘.",
+            "python_code": "raise ValueError('intentional failure')",
+            "permission_level": 3,
+        },
+    )
+    assert planned.status_code == 201
+    task = planned.json()
+
+    executed = client.post(
+        f"/api/agent/tasks/{task['task_id']}/execute",
+        json={"approved": True},
+    )
+    assert executed.status_code == 200
+    result = wait_for_task(client, task["task_id"])
+
+    assert result["status"] == "failed"
+    assert result["validation_passed"] is False
+    assert result["validation_records"]
+    assert any(
+        check["name"] == "python_execution" and not check["passed"]
+        for record in result["validation_records"]
+        for check in record["checks"]
+    )
+    assert "결과 자동 검증 실패" in result["error"]

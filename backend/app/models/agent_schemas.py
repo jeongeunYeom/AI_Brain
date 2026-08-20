@@ -83,6 +83,8 @@ class AgentTaskResponse(BaseModel):
     backups: list[str] = Field(default_factory=list)
     execution_records: list[dict[str, Any]] = Field(default_factory=list)
     results: list[dict[str, Any]] = Field(default_factory=list)
+    validation_passed: bool | None = None
+    validation_records: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None
     cancel_requested: bool = False
 
