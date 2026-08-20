@@ -23,6 +23,20 @@ function seconds(value?: number | null): string {
   return `${value.toFixed(2)}s`;
 }
 
+function answerPassed(
+  result: BenchmarkResult,
+  stage: "initial" | "final" = "final",
+): boolean | null | undefined {
+  if (stage === "initial") {
+    return (
+      result.initial_answer_passed ??
+      result.initial_benchmark_passed
+    );
+  }
+
+  return result.final_answer_passed ?? result.final_benchmark_passed;
+}
+
 function dateTime(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -223,7 +237,7 @@ export default function EvaluationDashboardPage() {
 
     if (filter === "passed") {
       return values.filter(
-        (result) => result.final_benchmark_passed === true,
+        (result) => answerPassed(result) === true,
       );
     }
     if (filter === "rewritten") {
@@ -231,7 +245,7 @@ export default function EvaluationDashboardPage() {
     }
     if (filter === "failed") {
       return values.filter(
-        (result) => result.final_benchmark_passed !== true,
+        (result) => answerPassed(result) === false,
       );
     }
     return values;
@@ -319,7 +333,7 @@ export default function EvaluationDashboardPage() {
                 {run?.run_id ?? "저장된 결과 없음"}
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                {dateTime(run?.created_at)} · {run?.model ?? "model unknown"} ·{" "}
+                {dateTime(run?.created_at)} · {run?.condition ?? run?.model ?? "condition unknown"} ·{" "}
                 {run?.question_count ?? 0} questions
               </p>
             </div>
@@ -336,9 +350,9 @@ export default function EvaluationDashboardPage() {
               >
                 {runs.map((item) => (
                   <option key={item.run_id} value={item.run_id}>
-                    {item.run_id} ·{" "}
+                    {item.run_id} · {item.condition ?? item.model ?? "unknown"} ·{" "}
                     {percentage(
-                      item.summary.final_benchmark_pass_rate,
+                      item.summary.answer_accuracy ?? item.summary.final_benchmark_pass_rate,
                     )}
                   </option>
                 ))}
@@ -349,8 +363,8 @@ export default function EvaluationDashboardPage() {
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <MetricCard
-            label="Final pass"
-            value={percentage(summary.final_benchmark_pass_rate)}
+            label="Answer accuracy"
+            value={percentage(summary.answer_accuracy)}
             description={`${summary.questions_completed ?? 0}/${
               summary.questions_total ?? 0
             } completed`}
@@ -358,18 +372,29 @@ export default function EvaluationDashboardPage() {
           />
           <MetricCard
             label="Initial pass"
-            value={percentage(summary.initial_benchmark_pass_rate)}
+            value={percentage(
+              summary.initial_answer_accuracy ??
+                summary.initial_benchmark_pass_rate,
+            )}
             description="첫 답변 기준"
           />
           <MetricCard
             label="Rewrite success"
-            value={percentage(summary.rewrite_success_rate)}
-            description={`${rewriteCount}개 문항 자동 복구`}
+            value={percentage(
+              run?.mode === "ollama-direct"
+                ? null
+                : summary.rewrite_success_rate,
+            )}
+            description={
+              run?.mode === "ollama-direct"
+                ? "단독 LLM에는 적용 안 됨"
+                : `${rewriteCount}개 문항 자동 복구`
+            }
           />
           <MetricCard
-            label="Detection"
-            value={percentage(summary.validator_detection_rate)}
-            description="검증기 오류 발견률"
+            label="Hallucination"
+            value={percentage(summary.hallucination_rate)}
+            description="금지 주장·잘못된 비거절 비율"
           />
           <MetricCard
             label="Page hit"
@@ -388,25 +413,39 @@ export default function EvaluationDashboardPage() {
             <h2 className="text-base font-black">품질 지표</h2>
             <div className="mt-5 space-y-5">
               <RateBar
-                label="최종 Benchmark 통과율"
-                value={summary.final_benchmark_pass_rate}
-                caption="자동 재작성 이후"
+                label="답변 정확도"
+                value={summary.answer_accuracy}
+                caption="내용·거절 행동 기준"
               />
               <RateBar
-                label="최초 Benchmark 통과율"
-                value={summary.initial_benchmark_pass_rate}
-                caption="첫 생성 답변"
+                label="환각률"
+                value={summary.hallucination_rate}
+                caption="낮을수록 좋음"
               />
-              <RateBar
-                label="재작성 성공률"
-                value={summary.rewrite_success_rate}
-                caption="최초 실패 문항 중 복구 비율"
-              />
-              <RateBar
-                label="검증기 오류 감지율"
-                value={summary.validator_detection_rate}
-                caption="실제 오류를 검증기가 잡은 비율"
-              />
+              {run?.mode !== "ollama-direct" && (
+                <>
+                  <RateBar
+                    label="최종 Benchmark 통과율"
+                    value={summary.final_benchmark_pass_rate}
+                    caption="답변과 검색 문서를 함께 평가"
+                  />
+                  <RateBar
+                    label="최초 Benchmark 통과율"
+                    value={summary.initial_benchmark_pass_rate}
+                    caption="첫 생성 답변"
+                  />
+                  <RateBar
+                    label="재작성 성공률"
+                    value={summary.rewrite_success_rate}
+                    caption="최초 실패 문항 중 복구 비율"
+                  />
+                  <RateBar
+                    label="검증기 오류 감지율"
+                    value={summary.validator_detection_rate}
+                    caption="실제 오류를 검증기가 잡은 비율"
+                  />
+                </>
+              )}
               <RateBar
                 label="정확한 거절률"
                 value={summary.exact_refusal_rate}
@@ -414,8 +453,13 @@ export default function EvaluationDashboardPage() {
               />
               <RateBar
                 label="예상 문서 적중률"
-                value={summary.expected_document_hit_rate}
+                value={summary.retrieval_document_recall_at_k ?? summary.expected_document_hit_rate}
                 caption="정답 문서가 검색 근거에 포함"
+              />
+              <RateBar
+                label="Figure 검색 정확도"
+                value={summary.figure_retrieval_accuracy}
+                caption="Figure 문항의 관련 이미지 반환"
               />
             </div>
           </div>
@@ -459,7 +503,7 @@ export default function EvaluationDashboardPage() {
             <div>
               <h2 className="text-base font-black">카테고리별 결과</h2>
               <p className="text-xs text-slate-500">
-                각 질문 유형의 최종 통과율
+                각 질문 유형의 답변 정확도
               </p>
             </div>
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-500">
@@ -478,10 +522,13 @@ export default function EvaluationDashboardPage() {
                 </p>
                 <div className="mt-2 flex items-end justify-between">
                   <span className="text-2xl font-black">
-                    {percentage(metric.final_pass_rate)}
+                    {percentage(
+                      metric.answer_accuracy ?? metric.final_pass_rate,
+                    )}
                   </span>
                   <span className="text-xs text-slate-400">
-                    {metric.final_passed ?? 0}/{metric.total ?? 0}
+                    {metric.answer_passed ?? metric.final_passed ?? 0}/
+                    {metric.total ?? 0}
                   </span>
                 </div>
               </div>
@@ -555,12 +602,12 @@ export default function EvaluationDashboardPage() {
                       </td>
                       <td className="px-3 py-3">
                         <StatusBadge
-                          passed={result.initial_benchmark_passed}
+                          passed={answerPassed(result, "initial")}
                         />
                       </td>
                       <td className="px-3 py-3">
                         <StatusBadge
-                          passed={result.final_benchmark_passed}
+                          passed={answerPassed(result)}
                         />
                       </td>
                       <td className="px-3 py-3 text-sm font-bold">
@@ -591,7 +638,7 @@ export default function EvaluationDashboardPage() {
                       {selectedResult.id}
                     </span>
                     <StatusBadge
-                      passed={selectedResult.final_benchmark_passed}
+                      passed={answerPassed(selectedResult)}
                     />
                     {selectedResult.rewrite_success && (
                       <StatusBadge passed label="REWRITTEN" />

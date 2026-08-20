@@ -428,5 +428,85 @@
       "(x축|x[- ]?axis|y축|y[- ]?axis).{0,100}(series|계열)"
     ],
     "evaluator_version": "welltest-deterministic-v2"
+  },
+  {
+    "id": "WT-017",
+    "variant_of": "WT-001",
+    "question": "Pressure derivative 곡선만 보고 초기 wellbore storage와 중기 radial flow를 어떻게 구분하는지 비교해줘."
+  },
+  {
+    "id": "WT-018",
+    "variant_of": "WT-002",
+    "question": "'Pressure와 derivative의 unit-slope overlap은 radial flow의 증거다'라는 설명의 오류를 바로잡아줘."
+  },
+  {
+    "id": "WT-019",
+    "variant_of": "WT-003",
+    "question": "Type curve의 unit-slope 구간이 의미하는 현상과 두 곡선의 관계를 설명해줘."
+  },
+  {
+    "id": "WT-020",
+    "variant_of": "WT-004",
+    "question": "Derivative가 수평 plateau에 도달했다면 어떤 유동 구간으로 판단해야 하는지 설명해줘."
+  },
+  {
+    "id": "WT-021",
+    "variant_of": "WT-005",
+    "question": "Log-log 진단도와 semilog 그래프에서 radial flow의 표시가 어떻게 다른지 정리해줘."
+  },
+  {
+    "id": "WT-022",
+    "variant_of": "WT-006",
+    "question": "Early-time과 middle-time 구간의 pressure 및 derivative 모양을 서로 혼동하지 않게 설명해줘."
+  },
+  {
+    "id": "WT-023",
+    "variant_of": "WT-007",
+    "question": "생산 전 Appraisal RFT와 significant production 이후 RFT의 pressure gradient 변화를 수치와 함께 비교해줘."
+  },
+  {
+    "id": "WT-024",
+    "variant_of": "WT-008",
+    "question": "Significant Production 이후 RFT Figure에서 읽을 수 있는 모든 pressure gradient와 단위를 빠짐없이 적어줘."
+  },
+  {
+    "id": "WT-025",
+    "variant_of": "WT-009",
+    "question": "RFT Figure 2와 Figure 3에 속한 gradient를 Figure별로 분리해서 표처럼 정리해줘."
+  },
+  {
+    "id": "WT-026",
+    "variant_of": "WT-010",
+    "question": "문서의 RFT Figure에서 supercharged data point를 식별하거나 제외한 방식을 확인해줘."
+  },
+  {
+    "id": "WT-027",
+    "variant_of": "WT-011",
+    "question": "업로드된 Well Test 문서에서 Sleipner CO2 plume의 2026년 면적과 주입률을 찾아줘."
+  },
+  {
+    "id": "WT-028",
+    "variant_of": "WT-012",
+    "question": "현재 문서가 제시한 대한민국 동해 가스전의 2025년 일평균 생산량을 단위와 함께 알려줘."
+  },
+  {
+    "id": "WT-029",
+    "variant_of": "WT-013",
+    "question": "Wellbore storage와 radial flow는 설명하되 fracture flow는 문서 근거가 있는 범위까지만 구분해줘."
+  },
+  {
+    "id": "WT-030",
+    "variant_of": "WT-014",
+    "question": "Wellbore storage와 radial flow의 derivative 특징을 설명하고 근거 문서와 페이지를 함께 써줘."
+  },
+  {
+    "id": "WT-031",
+    "variant_of": "WT-015",
+    "question": "Pressure derivative를 이용해 middle-time radial flow의 진입 시점을 판단하는 기준을 설명해줘."
+  },
+  {
+    "id": "WT-032",
+    "variant_of": "WT-016",
+    "question": "Type curve에서 좌표축과 pressure·pressure derivative 데이터 계열을 각각 구별해 설명해줘."
   }
 ]

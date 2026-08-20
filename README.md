@@ -284,6 +284,53 @@ python scripts/e2e/run_e2e.py --use-compose
 python scripts/e2e/run_local_e2e.py
 ```
 
+## 논문용 Benchmark v1
+
+`evaluation/well_test_agent_benchmark.json`에는 실제 Well Test 문서 근거로
+검증하는 32개 질문이 들어 있습니다. 16개 핵심 개념마다 표현을 바꾼 질문을
+한 개씩 추가했으며 구성은 Text 14개, Figure 12개, Hallucination 6개입니다.
+따라서 논문에서는 **32개 독립 개념**이 아니라 **16개 개념·32개 질문**으로
+표기하고, 데이터 분할 시 같은 `concept_group`의 질문을 서로 다른 split에
+나누지 않아야 합니다.
+
+질문 세트와 실행 조건만 확인:
+
+```bash
+python backend/scripts/run_well_test_benchmark.py --dry-run
+```
+
+Qwen3 단독과 Qwen3 + RAG 비교:
+
+```bash
+python backend/scripts/run_well_test_benchmark.py \
+  --mode ollama-direct --model qwen3:8b --condition qwen3_baseline
+
+python backend/scripts/run_well_test_benchmark.py \
+  --mode rag --model qwen3:8b --condition qwen3_rag
+```
+
+동일 RAG에서 Gemma4 비교:
+
+```bash
+python backend/scripts/run_well_test_benchmark.py \
+  --mode rag --model gemma4:latest --condition gemma4_rag
+```
+
+각 실행이 만든 JSON을 논문용 비교 CSV/JSON으로 통합:
+
+```bash
+python backend/scripts/compare_benchmark_runs.py \
+  data/evaluation/well_test_benchmark_<baseline-run-id>.json \
+  data/evaluation/well_test_benchmark_<qwen-rag-run-id>.json \
+  data/evaluation/well_test_benchmark_<gemma-rag-run-id>.json
+```
+
+결과에는 답변 정확도, 환각률, 정확한 거절률, 문서·페이지 Retrieval
+Recall@K, Figure 답변·검색 정확도와 평균 응답 시간이 기록됩니다. 비교표의
+delta는 첫 번째 조건을 기준으로 한 기술 통계이며 통계적 유의성을 의미하지
+않습니다. Source별 관련성 정답표가 필요한 Citation Precision은 아직 자동
+계산하지 않으므로 후속 수동 라벨링 단계에서 추가합니다.
+
 ## 현재 상태와 한계
 
 현재 버전은 **안전성을 우선한 규칙 기반 Agent v1**입니다.

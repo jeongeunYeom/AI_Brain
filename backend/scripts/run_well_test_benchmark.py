@@ -24,6 +24,10 @@ from app.services.benchmark_evaluator import (  # noqa: E402
     STRICT_REFUSAL,
     evaluate_benchmark_answer,
 )
+from app.services.benchmark_suite import (  # noqa: E402
+    build_benchmark_manifest,
+    materialize_benchmark_items,
+)
 
 
 def utc_run_id() -> str:
@@ -161,6 +165,11 @@ def category_summary(
 
     summary: dict[str, Any] = {}
     for category, rows in sorted(grouped.items()):
+        answer_passes = sum(
+            1
+            for row in rows
+            if row.get("final_answer_passed") is True
+        )
         final_passes = sum(
             1
             for row in rows
@@ -168,6 +177,8 @@ def category_summary(
         )
         summary[category] = {
             "total": len(rows),
+            "answer_passed": answer_passes,
+            "answer_accuracy": ratio(answer_passes, len(rows)),
             "final_passed": final_passes,
             "final_pass_rate": ratio(
                 final_passes,
@@ -194,15 +205,40 @@ def build_summary(
         for row in completed
         if row.get("final_benchmark_passed") is True
     )
+    initial_validator_rows = [
+        row
+        for row in completed
+        if row.get("initial_validator_passed") is not None
+    ]
+    final_validator_rows = [
+        row
+        for row in completed
+        if row.get("final_validator_passed") is not None
+    ]
     initial_validator_passes = sum(
         1
-        for row in completed
+        for row in initial_validator_rows
         if row.get("initial_validator_passed") is True
     )
     final_validator_passes = sum(
         1
-        for row in completed
+        for row in final_validator_rows
         if row.get("final_validator_passed") is True
+    )
+    initial_answer_passes = sum(
+        1
+        for row in completed
+        if row.get("initial_answer_passed") is True
+    )
+    final_answer_passes = sum(
+        1
+        for row in completed
+        if row.get("final_answer_passed") is True
+    )
+    hallucinations = sum(
+        1
+        for row in completed
+        if row.get("hallucination_detected") is True
     )
 
     initial_benchmark_failures = [
@@ -215,9 +251,14 @@ def build_summary(
         for row in initial_benchmark_failures
         if row.get("final_benchmark_passed") is True
     )
+    validator_detection_rows = [
+        row
+        for row in initial_benchmark_failures
+        if row.get("initial_validator_passed") is not None
+    ]
     validator_detections = sum(
         1
-        for row in initial_benchmark_failures
+        for row in validator_detection_rows
         if row.get("initial_validator_passed") is False
     )
 
@@ -226,9 +267,14 @@ def build_summary(
         for row in completed
         if row.get("initial_benchmark_passed") is True
     ]
+    validator_false_positive_rows = [
+        row
+        for row in initially_correct
+        if row.get("initial_validator_passed") is not None
+    ]
     validator_false_positives = sum(
         1
-        for row in initially_correct
+        for row in validator_false_positive_rows
         if row.get("initial_validator_passed") is False
     )
 
@@ -265,12 +311,33 @@ def build_summary(
         if row.get("expected_document_hit") is True
     )
 
+    figure_rows = [
+        row for row in completed if row.get("question_type") == "figure"
+    ]
+    figure_answer_passes = sum(
+        1 for row in figure_rows if row.get("final_answer_passed") is True
+    )
+    figure_retrieval_rows = [
+        row for row in figure_rows if row.get("figure_retrieval_hit") is not None
+    ]
+    figure_retrieval_hits = sum(
+        1
+        for row in figure_retrieval_rows
+        if row.get("figure_retrieval_hit") is True
+    )
+
     return {
         "questions_total": len(results),
         "questions_completed": len(completed),
         "infrastructure_errors": (
             len(results) - len(completed)
         ),
+        "initial_answer_accuracy": ratio(
+            initial_answer_passes,
+            len(completed),
+        ),
+        "answer_accuracy": ratio(final_answer_passes, len(completed)),
+        "hallucination_rate": ratio(hallucinations, len(completed)),
         "initial_benchmark_pass_rate": ratio(
             initial_benchmark_passes,
             len(completed),
@@ -281,11 +348,11 @@ def build_summary(
         ),
         "initial_validator_pass_rate": ratio(
             initial_validator_passes,
-            len(completed),
+            len(initial_validator_rows),
         ),
         "final_validator_pass_rate": ratio(
             final_validator_passes,
-            len(completed),
+            len(final_validator_rows),
         ),
         "rewrite_success_rate": ratio(
             rewrite_successes,
@@ -293,11 +360,11 @@ def build_summary(
         ),
         "validator_detection_rate": ratio(
             validator_detections,
-            len(initial_benchmark_failures),
+            len(validator_detection_rows),
         ),
         "validator_false_positive_rate": ratio(
             validator_false_positives,
-            len(initially_correct),
+            len(validator_false_positive_rows),
         ),
         "exact_refusal_rate": ratio(
             exact_refusals,
@@ -310,6 +377,22 @@ def build_summary(
         "expected_document_hit_rate": ratio(
             document_hits,
             len(document_rows),
+        ),
+        "retrieval_document_recall_at_k": ratio(
+            document_hits,
+            len(document_rows),
+        ),
+        "retrieval_page_recall_at_k": ratio(
+            page_hits,
+            len(page_rows),
+        ),
+        "figure_answer_accuracy": ratio(
+            figure_answer_passes,
+            len(figure_rows),
+        ),
+        "figure_retrieval_accuracy": ratio(
+            figure_retrieval_hits,
+            len(figure_retrieval_rows),
         ),
         "average_attempts": safe_mean(
             [
@@ -354,8 +437,15 @@ def write_csv(
     columns = [
         "id",
         "category",
+        "question_type",
+        "concept_group",
+        "condition",
+        "mode",
         "model",
         "expected_behavior",
+        "initial_answer_passed",
+        "final_answer_passed",
+        "hallucination_detected",
         "initial_validator_passed",
         "final_validator_passed",
         "initial_benchmark_passed",
@@ -365,6 +455,8 @@ def write_csv(
         "final_status",
         "expected_document_hit",
         "preferred_page_hit",
+        "figure_retrieval_hit",
+        "figure_count",
         "source_pages",
         "retrieval_seconds",
         "generation_seconds",
@@ -406,6 +498,50 @@ def print_rate(label: str, value: float | None) -> None:
         print(f"{label}={value:.3f}")
 
 
+def figure_retrieval_hit(
+    item: dict[str, Any],
+    figures: list[dict[str, Any]],
+) -> bool | None:
+    if item.get("question_type") != "figure":
+        return None
+    if not figures:
+        return False
+    preferred_pages = {
+        int(page) for page in (item.get("preferred_pages") or [])
+    }
+    if not preferred_pages:
+        return True
+    figure_pages: set[int] = set()
+    for figure in figures:
+        try:
+            figure_pages.add(int(figure.get("page")))
+        except (TypeError, ValueError):
+            continue
+    return bool(preferred_pages.intersection(figure_pages))
+
+
+def direct_ollama_answer(
+    ollama_url: str,
+    *,
+    model: str,
+    question: str,
+    timeout: float,
+) -> tuple[str, float]:
+    started = time.perf_counter()
+    response = http_json(
+        "POST",
+        f"{ollama_url.rstrip('/')}/api/chat",
+        payload={
+            "model": model,
+            "stream": False,
+            "messages": [{"role": "user", "content": question}],
+        },
+        timeout=timeout,
+    )
+    answer = str((response.get("message") or {}).get("content") or "")
+    return answer, time.perf_counter() - started
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -418,6 +554,10 @@ def main() -> int:
         default="http://127.0.0.1:8000/api",
     )
     parser.add_argument(
+        "--ollama-url",
+        default="http://127.0.0.1:11434",
+    )
+    parser.add_argument(
         "--benchmark",
         default=str(
             PROJECT_ROOT
@@ -426,6 +566,16 @@ def main() -> int:
         ),
     )
     parser.add_argument("--model", default="qwen3:8b")
+    parser.add_argument(
+        "--mode",
+        choices=("rag", "ollama-direct"),
+        default="rag",
+    )
+    parser.add_argument(
+        "--condition",
+        default="",
+        help="논문 비교표에 표시할 실험 조건 이름.",
+    )
     parser.add_argument("--top-k", type=int, default=None)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument(
@@ -454,11 +604,13 @@ def main() -> int:
     args = parser.parse_args()
 
     benchmark_path = Path(args.benchmark).resolve()
-    benchmark_items = read_json(benchmark_path)
-    if not isinstance(benchmark_items, list):
+    raw_benchmark_items = read_json(benchmark_path)
+    if not isinstance(raw_benchmark_items, list):
         raise RuntimeError(
             "Benchmark JSON must contain a list."
         )
+    benchmark_items = materialize_benchmark_items(raw_benchmark_items)
+    benchmark_manifest = build_benchmark_manifest(benchmark_items)
 
     requested_ids = {
         item.strip()
@@ -476,8 +628,13 @@ def main() -> int:
         )
 
     print(f"benchmark={benchmark_path}")
+    print(f"mode={args.mode}")
     print(f"model={args.model}")
     print(f"questions={len(items)}")
+    print(
+        "question_types="
+        f"{benchmark_manifest['question_type_counts']}"
+    )
 
     for item in items:
         print(
@@ -491,15 +648,31 @@ def main() -> int:
         return 0
 
     api_base = args.api_url.rstrip("/")
-    health = http_json(
-        "GET",
-        f"{api_base}/health",
-        timeout=30.0,
-    )
-    print(
-        "backend_status="
-        f"{health.get('status', 'unknown')}"
-    )
+    if args.mode == "rag":
+        health = http_json(
+            "GET",
+            f"{api_base}/health",
+            timeout=30.0,
+        )
+        print(
+            "backend_status="
+            f"{health.get('status', 'unknown')}"
+        )
+    else:
+        tags = http_json(
+            "GET",
+            f"{args.ollama_url.rstrip('/')}/api/tags",
+            timeout=30.0,
+        )
+        installed = {
+            str(model.get("name") or "")
+            for model in (tags.get("models") or [])
+        }
+        if args.model not in installed:
+            raise RuntimeError(
+                f"Ollama model is not installed: {args.model}"
+            )
+        print("ollama_status=ok")
 
     settings = get_settings()
     agent_runs_dir = Path(settings.agent_runs_dir)
@@ -533,7 +706,11 @@ def main() -> int:
         result: dict[str, Any] = {
             "id": item_id,
             "category": item.get("category"),
+            "question_type": item.get("question_type"),
+            "concept_group": item.get("concept_group"),
             "question": question,
+            "condition": args.condition or f"{args.model}-{args.mode}",
+            "mode": args.mode,
             "model": args.model,
             "expected_behavior": item.get(
                 "expected_behavior"
@@ -542,31 +719,67 @@ def main() -> int:
         }
 
         try:
-            response = http_json(
-                "POST",
-                f"{api_base}/chat",
-                payload=request_payload,
-                timeout=args.timeout,
-            )
-            run_path, record = find_new_agent_run(
-                agent_runs_dir,
-                before_files,
-                benchmark_id=item_id,
-                question=question,
-            )
-
-            attempts = record.get("attempts") or []
-            initial_answer = (
-                str(attempts[0].get("answer") or "")
-                if attempts
-                else ""
-            )
-            final_answer = str(
-                response.get("answer") or ""
-            )
-            sources = (
-                record.get("retrieved_sources") or []
-            )
+            if args.mode == "rag":
+                response = http_json(
+                    "POST",
+                    f"{api_base}/chat",
+                    payload=request_payload,
+                    timeout=args.timeout,
+                )
+                run_path, record = find_new_agent_run(
+                    agent_runs_dir,
+                    before_files,
+                    benchmark_id=item_id,
+                    question=question,
+                )
+                attempts = record.get("attempts") or []
+                initial_answer = (
+                    str(attempts[0].get("answer") or "")
+                    if attempts
+                    else ""
+                )
+                final_answer = str(response.get("answer") or "")
+                sources = record.get("retrieved_sources") or []
+                figures = [
+                    figure
+                    for figure in (response.get("figures") or [])
+                    if isinstance(figure, dict)
+                ]
+                retrieval_seconds = float(
+                    record.get("retrieval_elapsed_seconds") or 0.0
+                )
+                generation_seconds = sum(
+                    float(attempt.get("elapsed_seconds") or 0.0)
+                    for attempt in attempts
+                )
+                total_seconds = float(
+                    record.get("total_elapsed_seconds") or 0.0
+                )
+                initial_validator_passed = (
+                    attempts[0].get("validation_passed")
+                    if attempts
+                    else None
+                )
+                final_validator_passed = record.get("final_passed")
+                final_status = record.get("final_status")
+                agent_run_file = str(run_path)
+            else:
+                final_answer, generation_seconds = direct_ollama_answer(
+                    args.ollama_url,
+                    model=args.model,
+                    question=question,
+                    timeout=args.timeout,
+                )
+                initial_answer = final_answer
+                sources = []
+                figures = []
+                attempts = [{"answer": final_answer}]
+                retrieval_seconds = 0.0
+                total_seconds = generation_seconds
+                initial_validator_passed = None
+                final_validator_passed = None
+                final_status = "completed"
+                agent_run_file = ""
 
             initial_evaluation = (
                 evaluate_benchmark_answer(
@@ -583,19 +796,6 @@ def main() -> int:
                 )
             )
 
-            generation_seconds = sum(
-                float(attempt.get("elapsed_seconds") or 0.0)
-                for attempt in attempts
-            )
-            initial_validator_passed = (
-                attempts[0].get("validation_passed")
-                if attempts
-                else None
-            )
-            final_validator_passed = record.get(
-                "final_passed"
-            )
-
             result.update(
                 {
                     "initial_answer": initial_answer,
@@ -610,6 +810,15 @@ def main() -> int:
                     "final_validator_passed": (
                         final_validator_passed
                     ),
+                    "initial_answer_passed": (
+                        initial_evaluation.answer_passed
+                    ),
+                    "final_answer_passed": (
+                        final_evaluation.answer_passed
+                    ),
+                    "hallucination_detected": (
+                        final_evaluation.hallucination_detected
+                    ),
                     "initial_benchmark_passed": (
                         initial_evaluation.passed
                     ),
@@ -621,9 +830,7 @@ def main() -> int:
                         and final_evaluation.passed
                     ),
                     "attempts": len(attempts),
-                    "final_status": record.get(
-                        "final_status"
-                    ),
+                    "final_status": final_status,
                     "expected_document_hit": (
                         final_evaluation
                         .expected_document_hit
@@ -632,21 +839,14 @@ def main() -> int:
                         final_evaluation
                         .preferred_page_hit
                     ),
-                    "retrieval_seconds": float(
-                        record.get(
-                            "retrieval_elapsed_seconds"
-                        )
-                        or 0.0
+                    "figure_retrieval_hit": figure_retrieval_hit(
+                        item,
+                        figures,
                     ),
-                    "generation_seconds": (
-                        generation_seconds
-                    ),
-                    "total_seconds": float(
-                        record.get(
-                            "total_elapsed_seconds"
-                        )
-                        or 0.0
-                    ),
+                    "figure_count": len(figures),
+                    "retrieval_seconds": retrieval_seconds,
+                    "generation_seconds": generation_seconds,
+                    "total_seconds": total_seconds,
                     "initial_required_failures": (
                         initial_evaluation
                         .required_failures
@@ -663,7 +863,7 @@ def main() -> int:
                         final_evaluation
                         .forbidden_hits
                     ),
-                    "agent_run_file": str(run_path),
+                    "agent_run_file": agent_run_file,
                 }
             )
 
@@ -684,6 +884,9 @@ def main() -> int:
                     ),
                     "initial_validator_passed": None,
                     "final_validator_passed": None,
+                    "initial_answer_passed": None,
+                    "final_answer_passed": None,
+                    "hallucination_detected": None,
                     "initial_benchmark_passed": None,
                     "final_benchmark_passed": None,
                     "rewrite_success": False,
@@ -691,6 +894,8 @@ def main() -> int:
                     "final_status": "infrastructure_error",
                     "expected_document_hit": None,
                     "preferred_page_hit": None,
+                    "figure_retrieval_hit": None,
+                    "figure_count": 0,
                     "source_pages": [],
                     "retrieval_seconds": 0.0,
                     "generation_seconds": 0.0,
@@ -723,9 +928,13 @@ def main() -> int:
         "created_at": datetime.now(
             timezone.utc
         ).isoformat(),
+        "condition": args.condition or f"{args.model}-{args.mode}",
+        "mode": args.mode,
         "model": args.model,
         "api_url": api_base,
+        "ollama_url": args.ollama_url.rstrip("/"),
         "question_count": len(items),
+        "benchmark_manifest": benchmark_manifest,
         "wall_clock_seconds": elapsed,
         "summary": summary,
         "results": results,
@@ -756,6 +965,14 @@ def main() -> int:
     print("\nBENCHMARK_COMPLETED=True")
     print(f"json={json_path}")
     print(f"csv={csv_path}")
+    print_rate(
+        "answer_accuracy",
+        summary["answer_accuracy"],
+    )
+    print_rate(
+        "hallucination_rate",
+        summary["hallucination_rate"],
+    )
     print_rate(
         "initial_benchmark_pass_rate",
         summary["initial_benchmark_pass_rate"],
@@ -788,9 +1005,13 @@ def main() -> int:
     has_infrastructure_error = (
         summary["infrastructure_errors"] > 0
     )
+    failure_field = (
+        "final_answer_passed"
+        if args.mode == "ollama-direct"
+        else "final_benchmark_passed"
+    )
     has_benchmark_failure = any(
-        row.get("final_benchmark_passed") is False
-        for row in results
+        row.get(failure_field) is False for row in results
     )
 
     if has_infrastructure_error:
