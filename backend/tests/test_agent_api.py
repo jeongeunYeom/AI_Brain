@@ -521,6 +521,96 @@ def test_scatter_plan_infers_korean_column_aliases(
     assert run_action["arguments"]["y_column"] == "free_ratio"
 
 
+def test_line_chart_plan_uses_explicit_chart_type(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "시간 순서처럼 값의 변화를 그래프로 보여줘.",
+            "target_path": "co2_result.csv",
+            "output_path": "results/trapped_line.png",
+            "chart_type": "line",
+            "x_column": "srco2",
+            "y_column": "trapped_ratio",
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    run_action = next(
+        action for action in task["actions"] if action["tool"] == "run_python"
+    )
+    assert run_action["arguments"]["chart_type"] == "line"
+    assert run_action["arguments"]["x_column"] == "srco2"
+    assert run_action["arguments"]["y_column"] == "trapped_ratio"
+    assert "plt.plot" in run_action["preview"]
+
+
+def test_bar_chart_plan_is_inferred_from_korean_request(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": (
+                "co2_result.csv에서 srco2와 trapped_ratio를 "
+                "막대그래프로 만들어줘."
+            ),
+            "target_path": "co2_result.csv",
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 201
+    run_action = next(
+        action
+        for action in response.json()["actions"]
+        if action["tool"] == "run_python"
+    )
+    assert run_action["arguments"]["chart_type"] == "bar"
+    assert run_action["arguments"]["x_column"] == "srco2"
+    assert run_action["arguments"]["y_column"] == "trapped_ratio"
+    assert "plt.bar" in run_action["preview"]
+
+
+def test_histogram_plan_uses_one_numeric_column(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    response = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "co2_result.csv의 포획 비율 분포를 보여줘.",
+            "target_path": "co2_result.csv",
+            "output_path": "results/trapped_histogram.png",
+            "chart_type": "histogram",
+            "x_column": "trapped_ratio",
+            "permission_level": 3,
+        },
+    )
+
+    assert response.status_code == 201
+    run_action = next(
+        action
+        for action in response.json()["actions"]
+        if action["tool"] == "run_python"
+    )
+    assert run_action["arguments"]["chart_type"] == "histogram"
+    assert run_action["arguments"]["x_column"] == "trapped_ratio"
+    assert "y_column" not in run_action["arguments"]
+    assert "plt.hist" in run_action["preview"]
+
+
 def test_scatter_plan_rejects_unknown_column(
     client: TestClient,
     agent_settings: Settings,
@@ -584,6 +674,80 @@ def test_scatter_executes_with_selected_columns(
     assert output.stat().st_size > 0
 
 
+def test_histogram_executes_and_creates_valid_png(
+    client: TestClient,
+    agent_settings: Settings,
+) -> None:
+    write_co2_csv(agent_settings)
+
+    planned = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "co2_result.csv의 trapped_ratio 히스토그램을 만들어줘.",
+            "target_path": "co2_result.csv",
+            "output_path": "results/trapped_histogram.png",
+            "chart_type": "histogram",
+            "x_column": "trapped_ratio",
+            "permission_level": 3,
+        },
+    )
+    assert planned.status_code == 201
+    task = planned.json()
+
+    executed = client.post(
+        f"/api/agent/tasks/{task['task_id']}/execute",
+        json={"approved": True},
+    )
+    assert executed.status_code == 200
+    result = wait_for_task(client, task["task_id"])
+
+    assert result["status"] == "completed", result.get("error")
+    assert result["validation_passed"] is True
+    assert any(
+        check["name"] == "png_integrity" and check["passed"]
+        for record in result["validation_records"]
+        for check in record["checks"]
+    )
+    assert "results/trapped_histogram.png" in result["created_files"]
+
+
+@pytest.mark.parametrize("chart_type", ["line", "bar"])
+def test_two_axis_chart_types_execute_and_create_valid_png(
+    client: TestClient,
+    agent_settings: Settings,
+    chart_type: str,
+) -> None:
+    write_co2_csv(agent_settings)
+    output_path = f"results/trapped_{chart_type}.png"
+
+    planned = client.post(
+        "/api/agent/plan",
+        json={
+            "request": "srco2에 따른 trapped_ratio 변화를 보여줘.",
+            "target_path": "co2_result.csv",
+            "output_path": output_path,
+            "chart_type": chart_type,
+            "x_column": "srco2",
+            "y_column": "trapped_ratio",
+            "permission_level": 3,
+        },
+    )
+    assert planned.status_code == 201
+    task = planned.json()
+
+    executed = client.post(
+        f"/api/agent/tasks/{task['task_id']}/execute",
+        json={"approved": True},
+    )
+    assert executed.status_code == 200
+    result = wait_for_task(client, task["task_id"])
+
+    assert result["status"] == "completed", result.get("error")
+    assert result["validation_passed"] is True
+    assert output_path in result["created_files"]
+    assert (agent_settings.agent_workspace_dir / output_path).stat().st_size > 0
+
+
 def test_report_requires_approval_and_creates_file(
     client: TestClient,
     agent_settings: Settings,
@@ -627,7 +791,13 @@ def test_report_requires_approval_and_creates_file(
         for check in record["checks"]
     )
     assert "results/report.txt" in result["created_files"]
-    assert (agent_settings.agent_workspace_dir / "results/report.txt").is_file()
+    report_path = agent_settings.agent_workspace_dir / "results/report.txt"
+    assert report_path.is_file()
+    report = report_path.read_text(encoding="utf-8")
+    assert "- 중앙값:" in report
+    assert "- 표준편차(표본):" in report
+    assert "[Pearson 상관계수]" in report
+    assert "captured ↔ free: -1" in report
     assert (agent_settings.agent_runs_dir / f"{task['task_id']}.json").is_file()
 
     restored = AgentService(agent_settings).get_task(task["task_id"])

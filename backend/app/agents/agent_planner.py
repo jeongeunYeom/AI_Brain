@@ -9,6 +9,7 @@ from uuid import uuid4
 from app.agents.permission_manager import PermissionManager
 from app.models.agent_schemas import (
     AgentAction,
+    AgentChartType,
     AgentPlanRequest,
     AgentToolName,
 )
@@ -68,6 +69,20 @@ _COLUMN_ALIASES = {
     ),
 }
 
+_CHART_LABELS = {
+    AgentChartType.SCATTER: "산점도",
+    AgentChartType.LINE: "선 그래프",
+    AgentChartType.BAR: "막대그래프",
+    AgentChartType.HISTOGRAM: "히스토그램",
+}
+
+_CHART_DEFAULT_OUTPUTS = {
+    AgentChartType.SCATTER: "results/scatter_plot.png",
+    AgentChartType.LINE: "results/line_plot.png",
+    AgentChartType.BAR: "results/bar_chart.png",
+    AgentChartType.HISTOGRAM: "results/histogram.png",
+}
+
 
 @dataclass
 class PlannedTask:
@@ -91,6 +106,7 @@ class AgentPlanner:
         lowered = text.lower()
         target = self._resolve_target(request.target_path, text)
         output = request.output_path
+        chart_type = self._requested_chart_type(request, lowered, target)
 
         if request.python_code:
             code = request.python_code.strip()
@@ -147,48 +163,13 @@ class AgentPlanner:
                 ],
             )
 
-        if self._looks_like_scatter(lowered):
-            csv_path = self._require_csv_target(target)
-            output_path = output or "results/scatter_plot.png"
-            self.permissions.resolve_path(
-                output_path,
-                must_exist=False,
-                allow_directory=False,
-                allowed_extensions={".png"},
-            )
-            csv_info = self._csv_info(csv_path)
-            x_name, y_name = self._select_scatter_columns(request, text, csv_info)
-            code = self._scatter_code(csv_path, output_path, x_name, y_name)
-            self.python_tools.validate(code)
-            return PlannedTask(
-                plan=[
-                    f"{csv_path}의 열 구조와 데이터 개수를 확인합니다.",
-                    f"X축은 {x_name}, Y축은 {y_name} 열로 확정합니다.",
-                    "두 열의 숫자 데이터에서 결측값과 변환 불가능한 행을 제외합니다.",
-                    "승인 후 Python으로 산점도를 생성합니다.",
-                    f"그래프를 {output_path}에 저장하고 결과를 검증합니다.",
-                ],
-                actions=[
-                    self._action(
-                        AgentToolName.READ_FILE,
-                        f"CSV 구조 확인: {csv_path}",
-                        {"path": csv_path, "start_line": 1, "end_line": 25},
-                        target_files=[csv_path],
-                    ),
-                    self._action(
-                        AgentToolName.RUN_PYTHON,
-                        f"{x_name}와 {y_name} 열의 산점도 생성",
-                        {
-                            "code": code,
-                            "x_column": x_name,
-                            "y_column": y_name,
-                            "expected_outputs": [output_path],
-                        },
-                        target_files=[csv_path, output_path],
-                        requires_approval=True,
-                        preview=code,
-                    ),
-                ],
+        if chart_type is not None:
+            return self._plan_csv_chart(
+                request,
+                text,
+                target,
+                output,
+                chart_type,
             )
 
         if self._looks_like_csv_report(lowered):
@@ -205,7 +186,8 @@ class AgentPlanner:
             return PlannedTask(
                 plan=[
                     f"{csv_path}의 열 구조와 데이터 개수를 확인합니다.",
-                    "숫자 열의 개수, 결측값, 최소·최대·평균을 계산합니다.",
+                    "숫자 열의 최소·최대·평균·중앙값·표준편차를 계산합니다.",
+                    "숫자 열 조합의 Pearson 상관계수를 계산합니다.",
                     "승인 후 분석 코드를 실행합니다.",
                     f"분석 보고서를 {output_path}에 저장하고 내용을 검증합니다.",
                 ],
@@ -377,18 +359,98 @@ class AgentPlanner:
             raise ValueError("CSV에 데이터 행이 없습니다.")
         return csv_info
 
-    def _select_scatter_columns(
+    def _plan_csv_chart(
+        self,
+        request: AgentPlanRequest,
+        text: str,
+        target: str | None,
+        output: str | None,
+        chart_type: AgentChartType,
+    ) -> PlannedTask:
+        csv_path = self._require_csv_target(target)
+        output_path = output or _CHART_DEFAULT_OUTPUTS[chart_type]
+        self.permissions.resolve_path(
+            output_path,
+            must_exist=False,
+            allow_directory=False,
+            allowed_extensions={".png"},
+        )
+        csv_info = self._csv_info(csv_path)
+        label = _CHART_LABELS[chart_type]
+
+        if chart_type == AgentChartType.HISTOGRAM:
+            x_name = self._select_histogram_column(request, text, csv_info)
+            y_name = None
+            column_plan = f"분포를 확인할 숫자 열은 {x_name}으로 확정합니다."
+            data_plan = "숫자 변환이 가능한 값을 모아 구간별 빈도를 계산합니다."
+            description = f"{x_name} 열의 {label} 생성"
+        else:
+            x_name, y_name = self._select_two_axis_columns(
+                request,
+                text,
+                csv_info,
+                label,
+            )
+            column_plan = f"X축은 {x_name}, Y축은 {y_name} 열로 확정합니다."
+            data_plan = "두 열의 숫자 데이터에서 결측값과 변환 불가능한 행을 제외합니다."
+            description = f"{x_name}와 {y_name} 열의 {label} 생성"
+
+        code = self._chart_code(
+            csv_path,
+            output_path,
+            chart_type,
+            x_name,
+            y_name,
+        )
+        self.python_tools.validate(code)
+        arguments = {
+            "code": code,
+            "chart_type": chart_type.value,
+            "x_column": x_name,
+            "expected_outputs": [output_path],
+        }
+        if y_name is not None:
+            arguments["y_column"] = y_name
+
+        return PlannedTask(
+            plan=[
+                f"{csv_path}의 열 구조와 데이터 개수를 확인합니다.",
+                column_plan,
+                data_plan,
+                f"승인 후 Python으로 {label}를 생성합니다.",
+                f"그래프를 {output_path}에 저장하고 PNG 무결성을 검증합니다.",
+            ],
+            actions=[
+                self._action(
+                    AgentToolName.READ_FILE,
+                    f"CSV 구조 확인: {csv_path}",
+                    {"path": csv_path, "start_line": 1, "end_line": 25},
+                    target_files=[csv_path],
+                ),
+                self._action(
+                    AgentToolName.RUN_PYTHON,
+                    description,
+                    arguments,
+                    target_files=[csv_path, output_path],
+                    requires_approval=True,
+                    preview=code,
+                ),
+            ],
+        )
+
+    def _select_two_axis_columns(
         self,
         request: AgentPlanRequest,
         text: str,
         csv_info: dict,
+        chart_label: str,
     ) -> tuple[str, str]:
         columns = [str(column) for column in csv_info["columns"]]
         explicit_x = (request.x_column or "").strip()
         explicit_y = (request.y_column or "").strip()
 
         if bool(explicit_x) != bool(explicit_y):
-            raise ValueError("산점도에는 X축과 Y축 열을 모두 선택해야 합니다.")
+            raise ValueError(f"{chart_label}에는 X축과 Y축 열을 모두 선택해야 합니다.")
 
         if explicit_x and explicit_y:
             x_name = self._resolve_column_name(explicit_x, columns)
@@ -407,10 +469,39 @@ class AgentPlanner:
         numeric = self._numeric_sample_columns(csv_info)
         if len(numeric) < 2:
             raise ValueError(
-                "산점도에 사용할 숫자 열이 2개 이상 필요합니다. "
+                f"{chart_label}에 사용할 숫자 열이 2개 이상 필요합니다. "
                 f"사용 가능한 열: {', '.join(columns)}"
             )
         return numeric[0], numeric[1]
+
+    def _select_histogram_column(
+        self,
+        request: AgentPlanRequest,
+        text: str,
+        csv_info: dict,
+    ) -> str:
+        columns = [str(column) for column in csv_info["columns"]]
+        numeric = self._numeric_sample_columns(csv_info)
+        explicit = (request.x_column or request.y_column or "").strip()
+        if explicit:
+            selected = self._resolve_column_name(explicit, columns)
+            if selected not in numeric:
+                raise ValueError(
+                    f"히스토그램에 사용할 '{selected}' 열에서 숫자 데이터를 "
+                    "확인할 수 없습니다."
+                )
+            return selected
+
+        mentioned = self._mentioned_columns(text, columns)
+        for column in mentioned:
+            if column in numeric:
+                return column
+        if numeric:
+            return numeric[0]
+        raise ValueError(
+            "히스토그램에 사용할 숫자 열이 필요합니다. "
+            f"사용 가능한 열: {', '.join(columns)}"
+        )
 
     @staticmethod
     def _resolve_column_name(requested: str, columns: list[str]) -> str:
@@ -542,15 +633,47 @@ class AgentPlanner:
 
     @staticmethod
     def _looks_like_csv_report(text: str) -> bool:
-        return "csv" in text and any(
-            word in text for word in ("분석", "통계", "보고서", "report")
-        ) and any(word in text for word in ("저장", "파일", "report", "보고서"))
+        if "csv" not in text:
+            return False
+        statistical_terms = (
+            "통계",
+            "평균",
+            "중앙값",
+            "표준편차",
+            "상관",
+            "pearson",
+            "보고서",
+            "report",
+        )
+        if any(word in text for word in statistical_terms):
+            return True
+        structure_terms = ("구조", "열 이름", "column", "행 수", "데이터 개수")
+        return "분석" in text and not any(word in text for word in structure_terms)
 
     @staticmethod
-    def _looks_like_scatter(text: str) -> bool:
-        return "csv" in text and any(
-            word in text for word in ("산점도", "scatter", "그래프", "plot")
-        )
+    def _requested_chart_type(
+        request: AgentPlanRequest,
+        text: str,
+        target: str | None,
+    ) -> AgentChartType | None:
+        if request.chart_type is not None:
+            return request.chart_type
+
+        has_csv = "csv" in text or bool(target and target.lower().endswith(".csv"))
+        if not has_csv:
+            return None
+        if any(word in text for word in ("히스토그램", "histogram", "분포도")):
+            return AgentChartType.HISTOGRAM
+        if any(word in text for word in ("막대그래프", "막대 그래프", "bar chart", "bar graph")):
+            return AgentChartType.BAR
+        if any(word in text for word in ("선 그래프", "선그래프", "꺾은선", "line plot", "line chart")):
+            return AgentChartType.LINE
+        if any(
+            word in text
+            for word in ("산점도", "scatter", "그래프", "plot", "chart")
+        ):
+            return AgentChartType.SCATTER
+        return None
 
     @staticmethod
     def _looks_like_figure_search(text: str) -> bool:
@@ -633,6 +756,7 @@ class AgentPlanner:
                 "",
             ]
 
+            numeric_columns = {{}}
             for column in columns:
                 values = []
                 missing = 0
@@ -645,6 +769,8 @@ class AgentPlanner:
                         values.append(float(raw))
                     except ValueError:
                         pass
+                if values:
+                    numeric_columns[column] = values
                 lines.append(f"[{{column}}]")
                 lines.append(f"- 결측값: {{missing}}")
                 if values:
@@ -652,9 +778,43 @@ class AgentPlanner:
                     lines.append(f"- 최소: {{min(values):.6g}}")
                     lines.append(f"- 최대: {{max(values):.6g}}")
                     lines.append(f"- 평균: {{statistics.fmean(values):.6g}}")
+                    lines.append(f"- 중앙값: {{statistics.median(values):.6g}}")
+                    if len(values) >= 2:
+                        lines.append(
+                            f"- 표준편차(표본): {{statistics.stdev(values):.6g}}"
+                        )
+                    else:
+                        lines.append("- 표준편차(표본): 계산에 2개 이상의 값이 필요함")
                 else:
                     lines.append("- 숫자 열이 아님")
                 lines.append("")
+
+            lines.append("[Pearson 상관계수]")
+            numeric_names = list(numeric_columns)
+            if len(numeric_names) < 2:
+                lines.append("- 숫자 열이 2개 이상 필요함")
+            for left_index in range(len(numeric_names)):
+                for right_index in range(left_index + 1, len(numeric_names)):
+                    left = numeric_names[left_index]
+                    right = numeric_names[right_index]
+                    left_values = []
+                    right_values = []
+                    for row in rows:
+                        try:
+                            left_value = float((row.get(left) or "").strip())
+                            right_value = float((row.get(right) or "").strip())
+                        except ValueError:
+                            continue
+                        left_values.append(left_value)
+                        right_values.append(right_value)
+                    if len(left_values) < 2:
+                        value_text = "계산에 2개 이상의 짝지어진 값이 필요함"
+                    elif len(set(left_values)) < 2 or len(set(right_values)) < 2:
+                        value_text = "한 열의 분산이 0이어서 계산할 수 없음"
+                    else:
+                        correlation = statistics.correlation(left_values, right_values)
+                        value_text = f"{{correlation:.6g}} (n={{len(left_values)}})"
+                    lines.append(f"- {{left}} ↔ {{right}}: {{value_text}}")
 
             with open(output_path, "w", encoding="utf-8") as handle:
                 handle.write(chr(10).join(lines))
@@ -664,11 +824,12 @@ class AgentPlanner:
         ).strip()
 
     @staticmethod
-    def _scatter_code(
+    def _chart_code(
         csv_path: str,
         output_path: str,
+        chart_type: AgentChartType,
         x_name: str,
-        y_name: str,
+        y_name: str | None,
     ) -> str:
         return textwrap.dedent(
             f"""
@@ -677,6 +838,7 @@ class AgentPlanner:
 
             input_path = {csv_path!r}
             output_path = {output_path!r}
+            chart_type = {chart_type.value!r}
             x_name = {x_name!r}
             y_name = {y_name!r}
 
@@ -687,7 +849,8 @@ class AgentPlanner:
                 raise ValueError("CSV에 데이터 행이 없습니다.")
 
             columns = list(rows[0].keys())
-            missing_columns = [name for name in (x_name, y_name) if name not in columns]
+            required_columns = [x_name] if y_name is None else [x_name, y_name]
+            missing_columns = [name for name in required_columns if name not in columns]
             if missing_columns:
                 raise ValueError("CSV 열을 찾을 수 없습니다: " + ", ".join(missing_columns))
 
@@ -696,26 +859,50 @@ class AgentPlanner:
             for row in rows:
                 try:
                     x_value = float((row.get(x_name) or "").strip())
-                    y_value = float((row.get(y_name) or "").strip())
+                    if y_name is not None:
+                        y_value = float((row.get(y_name) or "").strip())
                 except ValueError:
                     continue
                 x_values.append(x_value)
-                y_values.append(y_value)
+                if y_name is not None:
+                    y_values.append(y_value)
 
             if not x_values:
-                raise ValueError("선택한 두 열에 함께 사용할 수 있는 숫자 행이 없습니다.")
+                raise ValueError("선택한 열에 사용할 수 있는 숫자 행이 없습니다.")
 
             plt.figure(figsize=(8, 5))
-            plt.scatter(x_values, y_values)
-            plt.xlabel(x_name)
-            plt.ylabel(y_name)
-            plt.title(f"{{y_name}} vs {{x_name}}")
+            if chart_type == "histogram":
+                bins = min(20, max(5, round(len(x_values) ** 0.5)))
+                plt.hist(x_values, bins=bins, edgecolor="black", alpha=0.8)
+                plt.xlabel(x_name)
+                plt.ylabel("Frequency")
+                plt.title(f"Distribution of {{x_name}}")
+            else:
+                if chart_type == "line":
+                    pairs = sorted(zip(x_values, y_values))
+                    x_values = [pair[0] for pair in pairs]
+                    y_values = [pair[1] for pair in pairs]
+                    plt.plot(x_values, y_values, marker="o")
+                elif chart_type == "bar":
+                    unique_x = sorted(set(x_values))
+                    gaps = [
+                        right - left
+                        for left, right in zip(unique_x, unique_x[1:])
+                        if right > left
+                    ]
+                    bar_width = min(gaps) * 0.7 if gaps else 0.8
+                    plt.bar(x_values, y_values, width=bar_width)
+                else:
+                    plt.scatter(x_values, y_values)
+                plt.xlabel(x_name)
+                plt.ylabel(y_name)
+                plt.title(f"{{y_name}} vs {{x_name}}")
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
             with open(output_path, "wb"):
                 pass
             plt.savefig(output_path, dpi=160)
             plt.close()
-            print(f"Saved scatter plot: {{output_path}}")
+            print(f"Saved {{chart_type}} chart: {{output_path}}")
             """
         ).strip()
