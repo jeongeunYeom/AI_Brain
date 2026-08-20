@@ -54,6 +54,13 @@ function formatDuration(run: AgentRunSummary): string {
   return `${(milliseconds / 1000).toFixed(1)}초`;
 }
 
+function parseCsvPathList(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((path) => path.trim())
+    .filter(Boolean);
+}
+
 export default function AgentPage() {
   const [request, setRequest] = useState("");
   const [targetPath, setTargetPath] = useState("");
@@ -61,6 +68,8 @@ export default function AgentPage() {
   const [xColumn, setXColumn] = useState("");
   const [yColumn, setYColumn] = useState("");
   const [chartType, setChartType] = useState<"auto" | AgentChartType>("auto");
+  const [comparisonPaths, setComparisonPaths] = useState("");
+  const [compareColumn, setCompareColumn] = useState("");
   const [csvColumns, setCsvColumns] = useState<string[]>([]);
   const [columnsLoading, setColumnsLoading] = useState(false);
   const [columnError, setColumnError] = useState<string | null>(null);
@@ -194,6 +203,8 @@ export default function AgentPage() {
     setXColumn("");
     setYColumn("");
     setChartType("auto");
+    setComparisonPaths("");
+    setCompareColumn("");
     setColumnError(null);
 
     if (!path.toLowerCase().endsWith(".csv")) return;
@@ -226,11 +237,19 @@ export default function AgentPage() {
     setError(null);
     setTask(null);
     try {
+      const targetPaths = Array.from(
+        new Set([
+          targetPath.trim(),
+          ...parseCsvPathList(comparisonPaths),
+        ].filter(Boolean)),
+      );
       const planned = await createAgentPlan({
         request: request.trim(),
         conversation_id: conversationId || undefined,
         target_path: targetPath.trim() || undefined,
+        target_paths: targetPaths.length > 1 ? targetPaths : undefined,
         output_path: outputPath.trim() || undefined,
+        compare_column: compareColumn || undefined,
         x_column: xColumn || undefined,
         y_column: yColumn || undefined,
         chart_type: chartType === "auto" ? undefined : chartType,
@@ -717,6 +736,35 @@ export default function AgentPage() {
                           <option value="">{chartType === "histogram" ? "히스토그램에서는 사용 안 함" : "자동 인식"}</option>
                           {csvColumns.map((column) => <option key={column} value={column} disabled={column === xColumn}>{column}</option>)}
                         </select>
+                      </label>
+                    </div>
+                    <div className="mt-4 grid gap-3 border-t border-indigo-100 pt-4 sm:grid-cols-2">
+                      <label className="text-xs font-semibold text-slate-600">
+                        추가 비교 CSV 파일
+                        <textarea
+                          value={comparisonPaths}
+                          onChange={(event) => setComparisonPaths(event.target.value)}
+                          rows={2}
+                          placeholder={"예: srco2_0.20.csv, srco2_0.30.csv"}
+                          className="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                        />
+                      </label>
+                      <label className="text-xs font-semibold text-slate-600">
+                        비교할 공통 숫자 열
+                        <select
+                          value={compareColumn}
+                          onChange={(event) => setCompareColumn(event.target.value)}
+                          disabled={columnsLoading || csvColumns.length === 0}
+                          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm disabled:opacity-50"
+                        >
+                          <option value="">요청에서 자동 인식</option>
+                          {csvColumns.map((column) => (
+                            <option key={column} value={column}>{column}</option>
+                          ))}
+                        </select>
+                        <span className="mt-1 block font-normal text-slate-400">
+                          기본 대상까지 총 2개 이상이면 통합 CSV와 비교 PNG를 함께 만듭니다.
+                        </span>
                       </label>
                     </div>
                     {columnsLoading && <p className="mt-2 text-xs text-indigo-600">CSV 열을 불러오는 중...</p>}

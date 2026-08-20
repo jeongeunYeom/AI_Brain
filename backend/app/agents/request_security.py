@@ -53,6 +53,8 @@ def validate_agent_plan_request(request: AgentPlanRequest) -> None:
 
     _validate_request_text(request.request)
     _validate_explicit_path("대상 경로", request.target_path)
+    for value in request.target_paths:
+        _validate_explicit_path("비교 대상 경로", value)
     _validate_explicit_path("결과 경로", request.output_path)
 
 

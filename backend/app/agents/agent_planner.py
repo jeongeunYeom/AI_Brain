@@ -105,8 +105,10 @@ class AgentPlanner:
         text = request.request.strip()
         lowered = text.lower()
         target = self._resolve_target(request.target_path, text)
+        targets = self._resolve_targets(request.target_paths, text)
+        if target and target not in targets:
+            targets.insert(0, target)
         output = request.output_path
-        chart_type = self._requested_chart_type(request, lowered, target)
 
         if request.python_code:
             code = request.python_code.strip()
@@ -163,6 +165,15 @@ class AgentPlanner:
                 ],
             )
 
+        if self._looks_like_multi_csv_compare(request, lowered, targets):
+            return self._plan_multi_csv_comparison(
+                request,
+                text,
+                targets,
+                output,
+            )
+
+        chart_type = self._requested_chart_type(request, lowered, target)
         if chart_type is not None:
             return self._plan_csv_chart(
                 request,
@@ -338,6 +349,23 @@ class AgentPlanner:
         )
         return self.permissions.to_relative(path) or "."
 
+    def _resolve_targets(self, explicit: list[str], text: str) -> list[str]:
+        candidates = explicit or [
+            path for path in self._extract_paths(text) if Path(path).suffix.lower() == ".csv"
+        ]
+        resolved: list[str] = []
+        for candidate in candidates:
+            path = self.permissions.resolve_path(
+                candidate.strip(),
+                must_exist=False,
+                allow_directory=False,
+                allowed_extensions={".csv"},
+            )
+            relative = self.permissions.to_relative(path)
+            if relative not in resolved:
+                resolved.append(relative)
+        return resolved
+
     def _require_csv_target(self, target: str | None) -> str:
         if target:
             path = self.permissions.resolve_path(
@@ -350,6 +378,24 @@ class AgentPlanner:
             path = self.permissions.find_first_file(".csv")
         return self.permissions.to_relative(path)
 
+    def _require_csv_targets(self, targets: list[str]) -> list[str]:
+        if len(targets) < 2:
+            raise ValueError("CSV 비교에는 서로 다른 CSV 파일이 2개 이상 필요합니다.")
+        resolved: list[str] = []
+        for target in targets:
+            path = self.permissions.resolve_path(
+                target,
+                must_exist=True,
+                allow_directory=False,
+                allowed_extensions={".csv"},
+            )
+            relative = self.permissions.to_relative(path)
+            if relative not in resolved:
+                resolved.append(relative)
+        if len(resolved) < 2:
+            raise ValueError("CSV 비교에는 서로 다른 CSV 파일이 2개 이상 필요합니다.")
+        return resolved
+
     def _csv_info(self, csv_path: str) -> dict:
         result = self.file_tools.read_file(csv_path, start_line=1, end_line=6)
         csv_info = result.get("csv")
@@ -358,6 +404,103 @@ class AgentPlanner:
         if csv_info.get("row_count", 0) == 0:
             raise ValueError("CSV에 데이터 행이 없습니다.")
         return csv_info
+
+    def _plan_multi_csv_comparison(
+        self,
+        request: AgentPlanRequest,
+        text: str,
+        targets: list[str],
+        output: str | None,
+    ) -> PlannedTask:
+        csv_paths = self._require_csv_targets(targets)
+        output_path = output or "results/csv_comparison.csv"
+        output_file = self.permissions.resolve_path(
+            output_path,
+            must_exist=False,
+            allow_directory=False,
+            allowed_extensions={".csv"},
+        )
+        output_path = self.permissions.to_relative(output_file)
+        chart_path = str(Path(output_path).with_suffix(".png")).replace("\\", "/")
+        self.permissions.resolve_path(
+            chart_path,
+            must_exist=False,
+            allow_directory=False,
+            allowed_extensions={".png"},
+        )
+
+        csv_infos = [self._csv_info(path) for path in csv_paths]
+        first_columns = [str(column) for column in csv_infos[0]["columns"]]
+        common_columns = [
+            column
+            for column in first_columns
+            if all(column in info["columns"] for info in csv_infos[1:])
+        ]
+        common_numeric = [
+            column
+            for column in common_columns
+            if all(column in self._numeric_sample_columns(info) for info in csv_infos)
+        ]
+        if not common_numeric:
+            raise ValueError("모든 CSV에서 함께 비교할 수 있는 공통 숫자 열이 없습니다.")
+        compare_column = self._select_compare_column(
+            request,
+            text,
+            common_numeric,
+        )
+
+        code = self._multi_csv_comparison_code(
+            csv_paths,
+            output_path,
+            chart_path,
+            compare_column,
+        )
+        self.python_tools.validate(code)
+        read_actions = [
+            self._action(
+                AgentToolName.READ_FILE,
+                f"비교 CSV 구조 확인: {path}",
+                {"path": path, "start_line": 1, "end_line": 25},
+                target_files=[path],
+            )
+            for path in csv_paths
+        ]
+        run_action = self._action(
+            AgentToolName.RUN_PYTHON,
+            f"{len(csv_paths)}개 CSV의 {compare_column} 열 비교",
+            {
+                "code": code,
+                "input_paths": csv_paths,
+                "common_columns": common_columns,
+                "compare_column": compare_column,
+                "expected_outputs": [output_path, chart_path],
+            },
+            target_files=[*csv_paths, output_path, chart_path],
+            requires_approval=True,
+            preview=code,
+        )
+        return PlannedTask(
+            plan=[
+                f"{len(csv_paths)}개 CSV 파일의 열 구조와 데이터 행을 확인합니다.",
+                f"공통 열 {', '.join(common_columns)}을 확인합니다.",
+                f"공통 숫자 열 {compare_column}의 개수·최소·최대·평균을 파일별로 계산합니다.",
+                f"통합 비교표를 {output_path}에 저장합니다.",
+                f"파일별 비교 그래프를 {chart_path}에 저장하고 두 결과물을 검증합니다.",
+            ],
+            actions=[*read_actions, run_action],
+        )
+
+    def _select_compare_column(
+        self,
+        request: AgentPlanRequest,
+        text: str,
+        common_numeric: list[str],
+    ) -> str:
+        explicit = (request.compare_column or "").strip()
+        if explicit:
+            return self._resolve_column_name(explicit, common_numeric)
+        mentioned = self._mentioned_columns(text, common_numeric)
+        return mentioned[0] if mentioned else common_numeric[0]
 
     def _plan_csv_chart(
         self,
@@ -587,19 +730,31 @@ class AgentPlanner:
 
     @staticmethod
     def _extract_path(text: str) -> str | None:
+        paths = AgentPlanner._extract_paths(text)
+        return paths[0] if paths else None
+
+    @staticmethod
+    def _extract_paths(text: str) -> list[str]:
+        allowed = {
+            ".txt", ".md", ".py", ".json", ".csv", ".yaml", ".yml", ".log", ".png"
+        }
+        paths: list[str] = []
         quoted = re.findall(r"[\"'`](.+?)[\"'`]", text)
         for value in quoted:
-            if Path(value).suffix.lower() in {
-                ".txt", ".md", ".py", ".json", ".csv", ".yaml", ".yml", ".log", ".png"
-            }:
-                return value.strip()
+            candidate = value.strip()
+            if Path(candidate).suffix.lower() in allowed and candidate not in paths:
+                paths.append(candidate)
 
-        match = re.search(
+        matches = re.findall(
             r"([\w가-힣.()\-\\/]+\.(?:txt|md|py|json|csv|ya?ml|log|png))",
             text,
             flags=re.IGNORECASE,
         )
-        return match.group(1).strip() if match else None
+        for value in matches:
+            candidate = value.strip()
+            if candidate not in paths:
+                paths.append(candidate)
+        return paths
 
     @staticmethod
     def _replacement_values(
@@ -649,6 +804,21 @@ class AgentPlanner:
             return True
         structure_terms = ("구조", "열 이름", "column", "행 수", "데이터 개수")
         return "분석" in text and not any(word in text for word in structure_terms)
+
+    @staticmethod
+    def _looks_like_multi_csv_compare(
+        request: AgentPlanRequest,
+        text: str,
+        targets: list[str],
+    ) -> bool:
+        if len(targets) < 2:
+            return False
+        if request.target_paths:
+            return True
+        return any(
+            word in text
+            for word in ("비교", "대조", "차이", "조건별", "compare", "comparison")
+        )
 
     @staticmethod
     def _requested_chart_type(
@@ -820,6 +990,111 @@ class AgentPlanner:
                 handle.write(chr(10).join(lines))
 
             print(f"Saved report: {{output_path}}")
+            """
+        ).strip()
+
+    @staticmethod
+    def _multi_csv_comparison_code(
+        csv_paths: list[str],
+        output_path: str,
+        chart_path: str,
+        compare_column: str,
+    ) -> str:
+        return textwrap.dedent(
+            f"""
+            import csv
+            import statistics
+            import matplotlib.pyplot as plt
+
+            input_paths = {csv_paths!r}
+            output_path = {output_path!r}
+            chart_path = {chart_path!r}
+            compare_column = {compare_column!r}
+            labels = {[Path(path).stem for path in csv_paths]!r}
+            summary_rows = []
+
+            for input_path in input_paths:
+                with open(input_path, "r", encoding="utf-8-sig", newline="") as handle:
+                    rows = list(csv.DictReader(handle))
+                if not rows:
+                    raise ValueError(f"CSV에 데이터 행이 없습니다: {{input_path}}")
+                if compare_column not in rows[0]:
+                    raise ValueError(
+                        f"CSV에 {{compare_column}} 열이 없습니다: {{input_path}}"
+                    )
+
+                values = []
+                for row in rows:
+                    raw = (row.get(compare_column) or "").strip()
+                    if not raw:
+                        continue
+                    try:
+                        values.append(float(raw))
+                    except ValueError:
+                        continue
+                if not values:
+                    raise ValueError(
+                        f"{{input_path}}의 {{compare_column}} 열에 숫자 데이터가 없습니다."
+                    )
+                summary_rows.append(
+                    {{
+                        "source_file": input_path,
+                        "comparison_column": compare_column,
+                        "count": len(values),
+                        "minimum": min(values),
+                        "maximum": max(values),
+                        "mean": statistics.fmean(values),
+                    }}
+                )
+
+            with open(output_path, "w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "source_file",
+                        "comparison_column",
+                        "count",
+                        "minimum",
+                        "maximum",
+                        "mean",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerows(summary_rows)
+
+            positions = list(range(len(summary_rows)))
+            width = 0.25
+            plt.figure(figsize=(max(8, len(summary_rows) * 1.4), 5))
+            plt.bar(
+                [position - width for position in positions],
+                [row["minimum"] for row in summary_rows],
+                width=width,
+                label="Minimum",
+            )
+            plt.bar(
+                positions,
+                [row["mean"] for row in summary_rows],
+                width=width,
+                label="Mean",
+            )
+            plt.bar(
+                [position + width for position in positions],
+                [row["maximum"] for row in summary_rows],
+                width=width,
+                label="Maximum",
+            )
+            plt.xticks(positions, labels, rotation=20, ha="right")
+            plt.ylabel(compare_column)
+            plt.title(f"CSV comparison: {{compare_column}}")
+            plt.legend()
+            plt.grid(axis="y", alpha=0.3)
+            plt.tight_layout()
+            with open(chart_path, "wb"):
+                pass
+            plt.savefig(chart_path, dpi=160)
+            plt.close()
+            print(f"Saved comparison table: {{output_path}}")
+            print(f"Saved comparison chart: {{chart_path}}")
             """
         ).strip()
 

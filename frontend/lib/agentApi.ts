@@ -79,7 +79,9 @@ export type AgentPlanInput = {
   request: string;
   conversation_id?: string;
   target_path?: string;
+  target_paths?: string[];
   output_path?: string;
+  compare_column?: string;
   x_column?: string;
   y_column?: string;
   chart_type?: AgentChartType;
