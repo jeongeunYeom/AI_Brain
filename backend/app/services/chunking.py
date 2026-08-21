@@ -1,3 +1,6 @@
+from app.services.ontology import concept_metadata
+
+
 def chunk_pages(
     pages: list[dict[str, object]],
     filename: str,
@@ -16,19 +19,21 @@ def chunk_pages(
             end = min(start + chunk_size, len(text))
             chunk_text = text[start:end]
             chunk_id = f"{digest}:p{page['page']}:c{chunk_index}"
+            metadata = {
+                "document_id": digest,
+                "document": filename,
+                "page": page["page"],
+                "chunk_index": chunk_index,
+                "is_contents": bool(page.get("is_contents", False)),
+                "is_title_page": bool(page.get("is_title_page", False)),
+                "heading": str(page.get("heading", "")),
+                "document_type": str(page.get("document_type", "")),
+            }
+            metadata.update(concept_metadata(chunk_text))
             chunks.append({
                 "id": chunk_id,
                 "text": chunk_text,
-                "metadata": {
-                    "document_id": digest,
-                    "document": filename,
-                    "page": page["page"],
-                    "chunk_index": chunk_index,
-                    "is_contents": bool(page.get("is_contents", False)),
-                    "is_title_page": bool(page.get("is_title_page", False)),
-                    "heading": str(page.get("heading", "")),
-                    "document_type": str(page.get("document_type", "")),
-                },
+                "metadata": metadata,
             })
             if end == len(text):
                 break

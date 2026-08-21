@@ -13,6 +13,7 @@ from PIL import Image, ImageStat, UnidentifiedImageError
 from app.core.config import Settings
 from app.models.schemas import DocumentRecord
 from app.services.chunking import chunk_pages
+from app.services.ontology import write_relation_graph
 from app.services.figure_analysis import FigureAnalysisResult, FigureAnalysisService
 
 if TYPE_CHECKING:
@@ -300,6 +301,10 @@ class DocumentProcessor:
             page["document_type"] = document_info.get("document_type", "")
 
         chunks = self.chunk_pages(pages, display_filename, digest)
+        write_relation_graph(
+            self.settings.ontology_dir / f"{digest}.jsonl",
+            chunks,
+        )
         record = DocumentRecord(
             document_id=digest,
             filename=display_filename,

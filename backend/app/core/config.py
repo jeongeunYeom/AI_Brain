@@ -249,6 +249,10 @@ class Settings:
         return self.data_dir / "metadata"
 
     @property
+    def ontology_dir(self) -> Path:
+        return self.data_dir / "ontology"
+
+    @property
     def evaluation_dir(self) -> Path:
         return self.data_dir / "evaluation"
 
@@ -278,6 +282,7 @@ def get_settings() -> Settings:
         settings.figure_analysis_inputs_dir,
         settings.vector_db_dir,
         settings.metadata_dir,
+        settings.ontology_dir,
         settings.evaluation_dir,
         settings.agent_runs_dir,
         settings.agent_conversations_dir,

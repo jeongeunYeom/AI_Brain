@@ -21,6 +21,8 @@ petroleum-rag-agent의 목표는 단순한 질의응답을 넘어 PDF와 연구 
 - BGE-M3 임베딩과 ChromaDB 영구 저장
 - 질문 유형에 따른 검색 전략 선택
 - 검색 문서에 근거한 답변과 문서·페이지 출처 표시
+- Ontology v0.1 concept metadata와 간단한 relation graph 생성
+- 문서별 relation graph를 `data/ontology/<document_id>.jsonl`에 저장
 - PDF 그림 추출, Vision 모델 분석 및 Figure Note 저장
 - 관련 그림과 Plotly 그래프 표시
 - Figure Review 및 성능 평가 화면
@@ -163,6 +165,7 @@ petroleum-rag-agent/
 │  ├─ figure_notes/
 │  ├─ vector_db/
 │  ├─ metadata/
+│  ├─ ontology/
 │  ├─ agent_runs/
 │  └─ agent_backups/
 └─ workspace/              # Agent가 접근할 수 있는 작업공간
