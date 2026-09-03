@@ -173,6 +173,10 @@ function formatChatDate(value: string): string {
   });
 }
 
+function serializeChatMessages(messages: ChatMessage[]): string {
+  return JSON.stringify(messages);
+}
+
 export default function Home() {
   const [documentFiles, setDocumentFiles] = useState<File[]>([]);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -254,10 +258,20 @@ export default function Home() {
       const existing = previous.find(
         (chat) => chat.id === activeChatId,
       );
+      const title = makeChatTitle(messages);
+      const messageSnapshot = serializeChatMessages(messages);
+
+      if (
+        existing &&
+        existing.title === title &&
+        serializeChatMessages(existing.messages) === messageSnapshot
+      ) {
+        return previous;
+      }
 
       const savedChat: SavedChat = {
         id: activeChatId,
-        title: makeChatTitle(messages),
+        title,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
         messages,

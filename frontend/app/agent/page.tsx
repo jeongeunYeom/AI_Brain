@@ -11,7 +11,6 @@ import {
   AgentTask,
   AgentRunSummary,
   cancelAgentTask,
-  createAgentConversation,
   createAgentPlan,
   executeAgentTask,
   getAgentCsvColumns,
@@ -120,21 +119,12 @@ export default function AgentPage() {
     }
   }
 
-  async function startNewConversation() {
-    setBusy(true);
+  function startNewConversation() {
     setError(null);
-    try {
-      const created = await createAgentConversation();
-      setConversationId(created.conversation_id);
-      setConversationTasks([]);
-      setTask(null);
-      setRequest("");
-      await refreshConversations();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "새 대화를 만들지 못했습니다.");
-    } finally {
-      setBusy(false);
-    }
+    setConversationId(null);
+    setConversationTasks([]);
+    setTask(null);
+    setRequest("");
   }
 
   async function refreshRuns() {
@@ -298,7 +288,6 @@ export default function AgentPage() {
       }
       await refreshWorkspace(".");
       await refreshRuns();
-      await refreshConversations();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Agent 작업 실행에 실패했습니다.");
     } finally {
@@ -317,7 +306,6 @@ export default function AgentPage() {
         tasks.map((item) => item.task_id === canceled.task_id ? canceled : item),
       );
       await refreshRuns();
-      await refreshConversations();
     } catch (err) {
       setError(err instanceof Error ? err.message : "작업 취소에 실패했습니다.");
     } finally {
@@ -336,7 +324,7 @@ export default function AgentPage() {
   const isCsvTarget = targetPath.trim().toLowerCase().endsWith(".csv");
 
   return (
-    <main className="min-h-screen bg-white text-slate-900 md:pl-[72px] lg:pl-[356px]">
+    <main className="min-h-screen bg-white text-slate-900 md:pl-[72px] lg:pl-[528px]">
       <AppIconRail />
       <AgentMobileDrawer
         open={mobileMenuOpen}
@@ -389,7 +377,7 @@ export default function AgentPage() {
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => void startNewConversation()}
+                onClick={startNewConversation}
                 className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40"
               >
                 ＋ 새 대화
@@ -669,7 +657,7 @@ export default function AgentPage() {
           </section>
         </div>
 
-        <section className="fixed bottom-0 right-0 z-30 border-t border-slate-200 bg-white/95 px-4 pb-4 pt-3 shadow-[0_-12px_36px_rgba(15,23,42,0.08)] backdrop-blur md:left-[72px] lg:left-[356px] sm:px-6 lg:px-8">
+        <section className="fixed bottom-0 right-0 z-30 border-t border-slate-200 bg-white/95 px-4 pb-4 pt-3 shadow-[0_-12px_36px_rgba(15,23,42,0.08)] backdrop-blur md:left-[72px] lg:left-[528px] sm:px-6 lg:px-8">
           <div className="mx-auto max-w-6xl">
             {error && (
               <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700">
@@ -847,7 +835,7 @@ export default function AgentPage() {
           </div>
         </section>
 
-        <section className="hidden border-r border-slate-200 bg-slate-50 p-4 lg:fixed lg:inset-y-0 lg:left-[72px] lg:block lg:w-[284px] lg:overflow-y-auto">
+        <section className="hidden border-r border-slate-200 bg-[#f8fafc] p-4 lg:fixed lg:inset-y-0 lg:left-[72px] lg:block lg:w-[456px] lg:overflow-y-auto">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="font-black">Agent 작업 기록</h2>
