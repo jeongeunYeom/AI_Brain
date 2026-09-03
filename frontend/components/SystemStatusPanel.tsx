@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getSystemStatus, SystemStatus } from "@/lib/api";
 
 function Dot({ ok }: { ok: boolean }) {
@@ -21,12 +21,16 @@ function SystemRow({ label, value, ok }: { label: string; value?: string | numbe
   );
 }
 
-export function SystemStatusPanel() {
+type SystemStatusPanelProps = {
+  refreshKey?: number;
+};
+
+export function SystemStatusPanel({ refreshKey = 0 }: SystemStatusPanelProps) {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -36,11 +40,11 @@ export function SystemStatusPanel() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void refresh();
-  }, []);
+  }, [refresh, refreshKey]);
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-3 text-slate-900 shadow-sm">
