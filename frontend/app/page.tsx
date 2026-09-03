@@ -186,7 +186,7 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [uploadJob, setUploadJob] = useState<UploadJob | null>(null);
   const [expandedSource, setExpandedSource] = useState<string | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState(300);
+  const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0);
   const [selectedFigure, setSelectedFigure] = useState<FigureReference | null>(null);
   const [answerMode, setAnswerMode] = useState<AnswerMode>("qwen3:8b");
 
@@ -396,8 +396,13 @@ export default function Home() {
       }
 
       setStatus(`Uploaded ${completed}/${documentFiles.length} files · ${totalChunks} chunks${skipped ? ` · ${skipped} reused` : ""}.`);
+      setDocumentFiles([]);
+      setKnowledgeRefreshKey((previous) => previous + 1);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Upload failed");
+      if (completed > 0) {
+        setKnowledgeRefreshKey((previous) => previous + 1);
+      }
     } finally {
       setBusy(false);
     }
@@ -499,29 +504,10 @@ export default function Home() {
   }
 
 
-  function startSidebarResize() {
-    const onMouseMove = (event: MouseEvent) => {
-      const nextWidth = Math.min(520, Math.max(248, event.clientX - 72));
-      setSidebarWidth(nextWidth);
-    };
-
-    const onMouseUp = () => {
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-  }
-
   return (
     <main className="flex h-screen overflow-hidden bg-[#eef1f6] text-slate-900 md:pl-[72px]">
       <AppIconRail />
-      <aside className="relative hidden shrink-0 border-r border-slate-200 bg-[#f8fafc] md:flex md:flex-col" style={{ width: sidebarWidth }}>
+      <aside className="hidden w-[456px] shrink-0 border-r border-slate-200 bg-[#f8fafc] md:flex md:flex-col">
         <div className="flex h-14 items-center gap-3 border-b border-slate-200 px-4">
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-600 text-sm font-bold text-white">A</div>
           <div className="min-w-0">
@@ -620,7 +606,7 @@ export default function Home() {
                   disabled
                 />
               </div>
-              <DocumentInfoPanel />
+              <DocumentInfoPanel refreshKey={knowledgeRefreshKey} />
             </section>
 
             <section>
@@ -667,7 +653,7 @@ export default function Home() {
 
             <section>
               <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">System</p>
-              <SystemStatusPanel />
+              <SystemStatusPanel refreshKey={knowledgeRefreshKey} />
             </section>
           </div>
         </div>
@@ -679,14 +665,6 @@ export default function Home() {
           </div>
         </div>
 
-        <button
-          type="button"
-          aria-label="Resize sidebar"
-          onMouseDown={startSidebarResize}
-          className="absolute -right-1 top-0 z-20 hidden h-full w-2 cursor-col-resize bg-transparent transition hover:bg-indigo-200/70 md:block"
-        >
-          <span className="mx-auto mt-16 block h-12 w-1 rounded-full bg-slate-300" />
-        </button>
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col bg-white">

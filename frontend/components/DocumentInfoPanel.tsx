@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { API_BASE } from "@/lib/api";
 
 type DocumentRecord = {
@@ -17,17 +17,21 @@ function cleanTitle(document: DocumentRecord) {
   return (document.title || document.filename).replace(/\.[^/.]+$/, "");
 }
 
-export function DocumentInfoPanel() {
+type DocumentInfoPanelProps = {
+  refreshKey?: number;
+};
+
+export function DocumentInfoPanel({ refreshKey = 0 }: DocumentInfoPanelProps) {
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     const response = await fetch(`${API_BASE}/documents`, { cache: "no-store" });
     if (response.ok) setDocuments(await response.json());
-  }
+  }, []);
 
   useEffect(() => {
     void refresh();
-  }, []);
+  }, [refresh, refreshKey]);
 
   if (!documents.length) {
     return (
